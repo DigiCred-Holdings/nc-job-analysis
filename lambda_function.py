@@ -8,18 +8,15 @@ import os
 ### SKILL AND RETRIEVAL RELATED ###
 
 def load_skills_dataset():
-    # s3 = boto3.client('s3')
+    s3_client = boto3.client('s3')
 
-    # bucket_name = "storage"
-    # file_key = "data/sd.json"
+    bucket_name = "digicred-credential-analysis"
+    file_key = "dev/staging_registry.json"
 
-    # response = s3.get_object(Bucket=bucket_name, Key=file_key)
-    # content = response['Body'].read().decode('utf-8')
+    response = s3_client.get_object(Bucket=bucket_name, Key=file_key)
+    content = response['Body'].read().decode('utf-8')
 
-    # return json.loads(content)
-
-    with open(r"C:\Users\artio\OneDrive\Desktop\backbone\staging_registry.json", "r", encoding="utf-8") as file:
-        return json.load(file)
+    return json.loads(content)
 
 def standardize_courses(courses_list, source, sd):
     ### Standardize the source
@@ -77,11 +74,12 @@ def sum_skill_groups(skill_groups):
 ### OPENAI API RELATED ###
 
 def init_client():
-    base_dir = os.path.dirname(__file__) 
-    parent_dir = os.path.abspath(os.path.join(base_dir, ".."))
-    key_path = os.path.join(parent_dir, "OPENAI_KEY.txt")
-
-    return OpenAI(api_key=open(key_path).read().strip())
+    # Get OpenAI key from aws secrets manager or environment variable
+    api_key = os.getenv('OPENAI_API_KEY')
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY environment variable is not set.")
+    # Initialize OpenAI client with the API key
+    return OpenAI(api_key=api_key)
 
 def chatgpt_send_messages_json(messages, json_schema_wrapper, model, client):
     json_response = client.chat.completions.create(
@@ -96,8 +94,8 @@ def chatgpt_send_messages_json(messages, json_schema_wrapper, model, client):
             }
         }
     )
-    json_response_content = json_response.choices[0].message.content
-    return json.loads(json_response_content)
+    json_response_content = json.loads(json_response)["choices"][0]["message"]["content"]
+    return json_response_content
 
 
 def get_prompt_plus_schema(skills, skill_groups, course_descriptions): # Could be saved seperetely or in s3?
@@ -166,21 +164,13 @@ def lambda_handler(event, context):
     summary_gpt_model = "gpt-4.1-nano"
 
     sd = load_skills_dataset()
-
     standerdized_course_ids = standardize_courses(event["coursesList"], event["source"], sd)
-    print(standerdized_course_ids)
     courses_skill_data = retrieve_course_skill_data(standerdized_course_ids, sd)
-
     student_skills = [skill for course in courses_skill_data for skill in course["skills"]]
     student_skill_groups = sum_skill_groups([course["skill_groups"] for course in courses_skill_data])
-
-    print(student_skills)
-    print("\n\n", student_skill_groups)
-    
     summary = chatgpt_summary(student_skills, student_skill_groups, [(course["title"], course["description"]) for course in courses_skill_data], summary_gpt_model)
-    print(summary)
 
-    return {
+    response = {
         'status': 200,
         'body': {
             "summary": summary,
@@ -189,3 +179,4 @@ def lambda_handler(event, context):
             "course_id_list": standerdized_course_ids
         }
     }
+    return response
