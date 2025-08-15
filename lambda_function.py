@@ -94,7 +94,6 @@ def chatgpt_send_messages_json(messages, json_schema_wrapper, model, client):
             }
         }
     )
-    print(json_response)
     json_response_content = json.loads(json_response)["choices"][0]["message"]["content"]
     return json_response_content
 
@@ -165,21 +164,13 @@ def lambda_handler(event, context):
     summary_gpt_model = "gpt-4.1-nano"
 
     sd = load_skills_dataset()
-
     standerdized_course_ids = standardize_courses(event["coursesList"], event["source"], sd)
-    print(standerdized_course_ids)
     courses_skill_data = retrieve_course_skill_data(standerdized_course_ids, sd)
-
     student_skills = [skill for course in courses_skill_data for skill in course["skills"]]
     student_skill_groups = sum_skill_groups([course["skill_groups"] for course in courses_skill_data])
-
-    print(student_skills)
-    print("\n\n", student_skill_groups)
-    
     summary = chatgpt_summary(student_skills, student_skill_groups, [(course["title"], course["description"]) for course in courses_skill_data], summary_gpt_model)
-    print(summary)
 
-    return {
+    response = {
         'status': 200,
         'body': {
             "summary": summary,
@@ -188,3 +179,4 @@ def lambda_handler(event, context):
             "course_id_list": standerdized_course_ids
         }
     }
+    return response
