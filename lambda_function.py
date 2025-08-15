@@ -74,11 +74,12 @@ def sum_skill_groups(skill_groups):
 ### OPENAI API RELATED ###
 
 def init_client():
-    # Get OpenAI key from aws secrets manager
+    # Get OpenAI key from aws secrets manager and return OpenAI client
     secrets_client = boto3.client('secretsmanager')
     secret_response = secrets_client.get_secret_value(SecretId=os.environ['OPENAI_API_KEY_SECRET'])
-    # Initialize OpenAI client with the API key
-    return OpenAI(api_key=secret_response['SecretString'])
+    secret_string = secret_response['SecretString']
+    api_key = json.loads(secret_string).get('OPENAI_API_KEY')
+    return OpenAI(api_key=api_key)
 
 def chatgpt_send_messages_json(messages, json_schema_wrapper, model, client):
     json_response = client.chat.completions.create(
