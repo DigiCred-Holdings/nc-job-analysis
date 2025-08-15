@@ -1,6 +1,7 @@
+import json
 import sys
 import os
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))  # Adjust the path to include the parent directory
 import lambda_function
 from unittest.mock import patch, MagicMock
 
@@ -21,7 +22,26 @@ def test_lambda_handler():
     #     mock_s3vector.get_vectors.return_value = mock_response
     #     mock_client.return_value = mock_s3vector
 
-    response = lambda_function.lambda_handler(event, context)
+    # Patch the init_client function to return a mock OpenAI client
+    with patch('lambda_function.init_client') as mock_init_client:
+        mock_client = MagicMock()
+        mock_init_client.return_value = mock_client
+
+        mock_response = {
+            'choices': [{
+                'message': {
+                    'content': {
+                        "summary": "Mocked summary of skills",
+                    }
+                }
+            }],
+            'status': 200
+        }
+        # convert mock response to the expected format
+        mock_response = json.dumps(mock_response)
+        mock_client.chat.completions.create.return_value = mock_response
+
+        response = lambda_function.lambda_handler(event, context)
 
     assert response['status'] == 200
     assert 'body' in response
