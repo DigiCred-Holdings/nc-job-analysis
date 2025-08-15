@@ -5,7 +5,14 @@ import lambda_function
 from unittest.mock import patch, MagicMock
 
 def test_lambda_handler():
-    event = {}
+    event = {
+        "coursesList": [
+            ["Prin of Financial Accounting", "ACC 120"],
+            ["Prin of Financial Acct II", "ACC 122"],
+            ["Accounting Software Appl", "ACC 150"]
+        ],
+        "source": "Cape Fear Community College"
+    }
     context = {}
 
     # mock_response = {'vectors': ['mocked_vector']}
@@ -18,3 +25,6 @@ def test_lambda_handler():
 
     assert response['status'] == 200
     assert 'body' in response
+
+if __name__ == "__main__":
+    test_lambda_handler()
