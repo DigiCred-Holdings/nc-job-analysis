@@ -1,7 +1,11 @@
 name: Deploy Python Lambda
 
+# Run on both pushes to main branch and commits to pull requests targeting main branch
 on:
   push:
+    branches:
+      - main
+  pull_request:
     branches:
       - main
 
