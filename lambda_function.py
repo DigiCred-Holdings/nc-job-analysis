@@ -74,11 +74,11 @@ def sum_skill_groups(skill_groups):
 ### OPENAI API RELATED ###
 
 def init_client():
-    # Get OpenAI key from aws secrets manager or environment variable
-    api_key = os.getenv('OPENAI_API_KEY')
-    if not api_key:
-        raise ValueError("OPENAI_API_KEY environment variable is not set.")
-    # Initialize OpenAI client with the API key
+    # Get OpenAI key from aws secrets manager and return OpenAI client
+    secrets_client = boto3.client('secretsmanager')
+    secret_response = secrets_client.get_secret_value(SecretId=os.environ['OPENAI_API_KEY_SECRET'])
+    secret_string = secret_response['SecretString']
+    api_key = json.loads(secret_string).get('OPENAI_API_KEY')
     return OpenAI(api_key=api_key)
 
 def chatgpt_send_messages_json(messages, json_schema_wrapper, model, client):
@@ -94,8 +94,9 @@ def chatgpt_send_messages_json(messages, json_schema_wrapper, model, client):
             }
         }
     )
-    json_response_content = json.loads(json_response)["choices"][0]["message"]["content"]
-    return json_response_content
+    # Access the content directly from the response object
+    json_response_content = json_response.choices[0].message.content
+    return json.loads(json_response_content)
 
 
 def get_prompt_plus_schema(skills, skill_groups, course_descriptions): # Could be saved seperetely or in s3?
