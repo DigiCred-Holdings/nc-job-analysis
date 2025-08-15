@@ -94,8 +94,9 @@ def chatgpt_send_messages_json(messages, json_schema_wrapper, model, client):
             }
         }
     )
-    json_response_content = json.loads(json_response)["choices"][0]["message"]["content"]
-    return json_response_content
+    # Access the content directly from the response object
+    json_response_content = json_response.choices[0].message.content
+    return json.loads(json_response_content)
 
 
 def get_prompt_plus_schema(skills, skill_groups, course_descriptions): # Could be saved seperetely or in s3?
