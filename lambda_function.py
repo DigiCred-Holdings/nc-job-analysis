@@ -164,8 +164,15 @@ def _timeit(f):
 def lambda_handler(event, context):
     summary_gpt_model = "gpt-4.1-nano"
 
+    body = json.loads(event["body"])
+    if "coursesList" not in body or "source" not in body:
+        return {
+            'statusCode': 400,
+            'body': json.dumps({'error': 'Invalid input: coursesList and source are required.'})
+        }
+
     sd = load_skills_dataset()
-    standerdized_course_ids = standardize_courses(event["coursesList"], event["source"], sd)
+    standerdized_course_ids = standardize_courses(body["coursesList"], body["source"], sd)
     courses_skill_data = retrieve_course_skill_data(standerdized_course_ids, sd)
     student_skills = [skill for course in courses_skill_data for skill in course["skills"]]
     student_skill_groups = sum_skill_groups([course["skill_groups"] for course in courses_skill_data])
@@ -173,11 +180,11 @@ def lambda_handler(event, context):
 
     response = {
         'status': 200,
-        'body': {
+        'body': json.dumps({
             "summary": summary,
             "student_skill_list": student_skills,
             "student_skill_groups": student_skill_groups,
             "course_id_list": standerdized_course_ids
-        }
+        })
     }
     return response
