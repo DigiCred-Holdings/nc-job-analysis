@@ -1,6 +1,5 @@
 import json
 import boto3
-from rapidfuzz import process, fuzz
 from openai import OpenAI
 import os
 
@@ -19,40 +18,29 @@ def load_skills_dataset():
 
     return json.loads(content)
 
+def course_codes_match(code1, code2):
+    return str.lower(code1.strip()) == str.lower(code2.strip())
+
 def standardize_courses(courses_list, source, sd):
-    ### Standardize the source
-    src_code = ""
+    # Find the source abbreviation in the skills dataset
     for code, alts in sd["lookup"]["universities"].items():
         if str.lower(source) in [str.lower(alt) for alt in alts]:
             src_code = code
             break
-
-    ### Find all courses from specified source
-    university_courses_candidates = []
-    university_courses_ids = []
-
-    for course in sd["C"]:
-        if course["data"]["src"] == src_code:
-            university_courses_candidates.append(str.lower(course["data"]["to_query"]))
-            university_courses_ids.append(course["id"])
-
-    ### Match student's courses to courses from specified soruce (simply concatinates code and title)
-    matched_ids = []
-
-    for query_course in courses_list:
-        query = str.lower(query_course[0] + " " + query_course[1])
-
-        # Use rapidfuzz to find the best match
-        # `process.extractOne` returns a tuple (match, score, index)
-        result = process.extractOne(query, university_courses_candidates, scorer=fuzz.WRatio)
-        if result is not None:
-            best_i = result[2]
-            matched_ids.append(university_courses_ids[best_i])
-        else:
-            print(f"No match found for course: {query_course}")
-            continue
-
-    return matched_ids
+    
+    # Filter the courses based on the source code
+    all_courses = [course for course in sd["C"] if course["data"]["src"] == src_code]
+    matches = []
+    for course in courses_list:
+        # Use the second element in the course list element as the course code
+        course_code = str.lower(course[1])
+        # Find the course in the skills dataset
+        code_matches = all_courses.filter(lambda c: course_codes_match(c["data"]["code"], course_code))
+        if matches:
+            # If a match is found, return the course ID
+            matches.append(code_matches[0]["id"])
+        
+    return matches
 
 def retrieve_course_skill_data(target_ids, sd):
     course_skill_data = []
