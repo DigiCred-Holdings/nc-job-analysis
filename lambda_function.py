@@ -164,7 +164,17 @@ def _timeit(f):
 def lambda_handler(event, context):
     summary_gpt_model = "gpt-4.1-nano"
 
-    body = json.loads(event["body"])
+    if type(event["body"]) is str:
+        body = json.loads(event["body"])
+    else:
+        body = event["body"]
+    if not body:
+        return {
+            'statusCode': 400,
+            'body': json.dumps({'error': 'Invalid input: body cannot be empty.'})
+        }
+    
+    ()
     if "coursesList" not in body or "source" not in body:
         return {
             'statusCode': 400,
