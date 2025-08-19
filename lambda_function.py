@@ -34,9 +34,8 @@ def standardize_courses(courses_list, source, sd):
     for course in courses_list:
         # Use the second element in the course list element as the course code
         course_code = str.lower(course[1])
-        # Find the course in the skills dataset
-        code_matches = all_courses.filter(lambda c: course_codes_match(c["data"]["code"], course_code))
-        if matches:
+        code_matches = [course for course in all_courses if course_codes_match(course["data"]["code"], course_code)]
+        if code_matches:
             # If a match is found, return the course ID
             matches.append(code_matches[0]["id"])
         
