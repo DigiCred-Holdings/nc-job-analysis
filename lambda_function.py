@@ -9,11 +9,12 @@ import os
 
 def load_skills_dataset():
     s3_client = boto3.client('s3')
-
-    bucket_name = "digicred-credential-analysis"
-    file_key = "dev/staging_registry.json"
-
-    response = s3_client.get_object(Bucket=bucket_name, Key=file_key)
+    # Get bucket key from environment variable S3 URI e.g. s3://digicred-credential-analysis/dev/staging_registry.json
+    registry_uri = os.environ['REGISTRY_S3_URI']
+    bucket, key = registry_uri.replace("s3://", "").split("/", 1)
+    response = s3_client.get_object(Bucket=bucket, Key=key)
+    if response['ResponseMetadata']['HTTPStatusCode'] != 200:
+        raise Exception(f"Failed to retrieve data from S3: {response['ResponseMetadata']['HTTPStatusCode']}")
     content = response['Body'].read().decode('utf-8')
 
     return json.loads(content)
@@ -40,12 +41,14 @@ def standardize_courses(courses_list, source, sd):
 
     for query_course in courses_list:
         query = str.lower(query_course[0] + " " + query_course[1])
+
+        # Use rapidfuzz to find the best match
+        # `process.extractOne` returns a tuple (match, score, index)
         result = process.extractOne(query, university_courses_candidates, scorer=fuzz.WRatio)
         if result is not None:
             best_i = result[2]
             matched_ids.append(university_courses_ids[best_i])
         else:
-            # Optionally handle unmatched courses, e.g., skip or log
             print(f"No match found for course: {query_course}")
             continue
 
@@ -187,8 +190,15 @@ def lambda_handler(event, context):
             'body': json.dumps({'error': 'Invalid input: coursesList and source are required.'})
         }
 
+
     sd = load_skills_dataset()
     standerdized_course_ids = standardize_courses(body["coursesList"], body["source"], sd)
+    if not standerdized_course_ids:
+        return {
+            'statusCode': 404,
+            'body': json.dumps({'error': 'No matching courses found.'})
+        }
+
     courses_skill_data = retrieve_course_skill_data(standerdized_course_ids, sd)
     student_skills = [skill for course in courses_skill_data for skill in course["skills"]]
     student_skill_groups = sum_skill_groups([course["skill_groups"] for course in courses_skill_data])
