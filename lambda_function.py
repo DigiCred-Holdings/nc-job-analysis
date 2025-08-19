@@ -1,49 +1,43 @@
 import json
 import boto3
-from rapidfuzz import process, fuzz
 from openai import OpenAI
 import os
 
 
-### SKILL AND RETRIEVAL RELATED ###
-
 def load_skills_dataset():
     s3_client = boto3.client('s3')
-
-    bucket_name = "digicred-credential-analysis"
-    file_key = "dev/staging_registry.json"
-
-    response = s3_client.get_object(Bucket=bucket_name, Key=file_key)
+    # Get bucket key from environment variable S3 URI e.g. s3://digicred-credential-analysis/dev/staging_registry.json
+    registry_uri = os.environ['REGISTRY_S3_URI']
+    bucket, key = registry_uri.replace("s3://", "").split("/", 1)
+    response = s3_client.get_object(Bucket=bucket, Key=key)
+    if response['ResponseMetadata']['HTTPStatusCode'] != 200:
+        raise Exception(f"Failed to retrieve data from S3: {response['ResponseMetadata']['HTTPStatusCode']}")
     content = response['Body'].read().decode('utf-8')
 
     return json.loads(content)
 
+def course_codes_match(code1, code2):
+    return str.lower(code1.strip()) == str.lower(code2.strip())
+
 def standardize_courses(courses_list, source, sd):
-    ### Standardize the source
-    src_code = ""
+    # Find the source abbreviation in the skills dataset
     for code, alts in sd["lookup"]["universities"].items():
         if str.lower(source) in [str.lower(alt) for alt in alts]:
             src_code = code
             break
-
-    ### Find all courses from specified source
-    university_courses_candidates = []
-    university_courses_ids = []
-
-    for course in sd["C"]:
-        if course["data"]["src"] == src_code:
-            university_courses_candidates.append(str.lower(course["data"]["to_query"]))
-            university_courses_ids.append(course["id"])
-
-    ### Match student's courses to courses from specified soruce (simply concatinates code and title)
-    matched_ids = []
-
-    for query_course in courses_list:
-        query = str.lower(query_course[0] + " " + query_course[1])
-        best_i = process.extractOne(query, university_courses_candidates, scorer=fuzz.WRatio)[2]
-        matched_ids.append(university_courses_ids[best_i])
-
-    return matched_ids
+    
+    # Filter the courses based on the source code
+    all_courses = [course for course in sd["C"] if course["data"]["src"] == src_code]
+    matches = []
+    for course in courses_list:
+        # Use the second element in the course list element as the course code
+        course_code = str.lower(course[1])
+        code_matches = [course for course in all_courses if course_codes_match(course["data"]["code"], course_code)]
+        if code_matches:
+            # If a match is found, return the course ID
+            matches.append(code_matches[0]["id"])
+        
+    return matches
 
 def retrieve_course_skill_data(target_ids, sd):
     course_skill_data = []
@@ -74,11 +68,11 @@ def sum_skill_groups(skill_groups):
 ### OPENAI API RELATED ###
 
 def init_client():
-    # Get OpenAI key from aws secrets manager or environment variable
-    api_key = os.getenv('OPENAI_API_KEY')
-    if not api_key:
-        raise ValueError("OPENAI_API_KEY environment variable is not set.")
-    # Initialize OpenAI client with the API key
+    # Get OpenAI key from aws secrets manager and return OpenAI client
+    secrets_client = boto3.client('secretsmanager')
+    secret_response = secrets_client.get_secret_value(SecretId=os.environ['OPENAI_API_KEY_SECRET'])
+    secret_string = secret_response['SecretString']
+    api_key = json.loads(secret_string).get('OPENAI_API_KEY')
     return OpenAI(api_key=api_key)
 
 def chatgpt_send_messages_json(messages, json_schema_wrapper, model, client):
@@ -94,8 +88,9 @@ def chatgpt_send_messages_json(messages, json_schema_wrapper, model, client):
             }
         }
     )
-    json_response_content = json.loads(json_response)["choices"][0]["message"]["content"]
-    return json_response_content
+    # Access the content directly from the response object
+    json_response_content = json_response.choices[0].message.content
+    return json.loads(json_response_content)
 
 
 def get_prompt_plus_schema(skills, skill_groups, course_descriptions): # Could be saved seperetely or in s3?
@@ -163,8 +158,32 @@ def _timeit(f):
 def lambda_handler(event, context):
     summary_gpt_model = "gpt-4.1-nano"
 
+    if type(event["body"]) is str:
+        body = json.loads(event["body"])
+    else:
+        body = event["body"]
+    if not body:
+        return {
+            'statusCode': 400,
+            'body': json.dumps({'error': 'Invalid input: body cannot be empty.'})
+        }
+    
+    ()
+    if "coursesList" not in body or "source" not in body:
+        return {
+            'statusCode': 400,
+            'body': json.dumps({'error': 'Invalid input: coursesList and source are required.'})
+        }
+
+
     sd = load_skills_dataset()
-    standerdized_course_ids = standardize_courses(event["coursesList"], event["source"], sd)
+    standerdized_course_ids = standardize_courses(body["coursesList"], body["source"], sd)
+    if not standerdized_course_ids:
+        return {
+            'statusCode': 404,
+            'body': json.dumps({'error': 'No matching courses found.'})
+        }
+
     courses_skill_data = retrieve_course_skill_data(standerdized_course_ids, sd)
     student_skills = [skill for course in courses_skill_data for skill in course["skills"]]
     student_skill_groups = sum_skill_groups([course["skill_groups"] for course in courses_skill_data])
@@ -172,11 +191,11 @@ def lambda_handler(event, context):
 
     response = {
         'status': 200,
-        'body': {
+        'body': json.dumps({
             "summary": summary,
             "student_skill_list": student_skills,
             "student_skill_groups": student_skill_groups,
             "course_id_list": standerdized_course_ids
-        }
+        })
     }
     return response
