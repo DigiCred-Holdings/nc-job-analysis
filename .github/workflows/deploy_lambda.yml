@@ -14,8 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       S3_BUCKET: digicred-lambda-packages
-      S3_KEY: dev-nc-jobs-analysis.zip
-      LAMBDA_FUNCTION_NAME: dev-nc-jobs-analysis
+      S3_KEY: dev-transcript-skills-analysis.zip
+      LAMBDA_FUNCTION_NAME: dev-transcript-skills-analysis
 
     steps:
       - name: Checkout Repository

@@ -4,8 +4,6 @@ from openai import OpenAI
 import os
 
 
-### SKILL AND RETRIEVAL RELATED ###
-
 def load_skills_dataset():
     s3_client = boto3.client('s3')
     # Get bucket key from environment variable S3 URI e.g. s3://digicred-credential-analysis/dev/staging_registry.json
