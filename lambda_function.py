@@ -40,8 +40,14 @@ def standardize_courses(courses_list, source, sd):
 
     for query_course in courses_list:
         query = str.lower(query_course[0] + " " + query_course[1])
-        best_i = process.extractOne(query, university_courses_candidates, scorer=fuzz.WRatio)[2]
-        matched_ids.append(university_courses_ids[best_i])
+        result = process.extractOne(query, university_courses_candidates, scorer=fuzz.WRatio)
+        if result is not None:
+            best_i = result[2]
+            matched_ids.append(university_courses_ids[best_i])
+        else:
+            # Optionally handle unmatched courses, e.g., skip or log
+            print(f"No match found for course: {query_course}")
+            continue
 
     return matched_ids
 
