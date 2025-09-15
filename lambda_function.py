@@ -2,6 +2,7 @@ import json
 import boto3
 from openai import OpenAI
 import os
+import re
 
 
 def load_skills_dataset():
@@ -146,6 +147,82 @@ def chatgpt_summary(skills, skill_groups, course_descriptions, model):
     summary = chatgpt_send_messages_json(prompt, json_schema, model, init_client())
     return summary["summary"]
 
+def add_highlight_to_analysis(analysis_json):
+    body = analysis_json["body"]
+
+    summary = (body["summary"]).strip()
+    skill_groups = body["student_skill_groups"] or {}
+    skills = body["student_skill_list"] or []
+    course_ids = body["course_id_list"] or []
+
+
+    # Because there was little testing period for the initial skill extraction, some skills contain defects, like starting with "15. ", they are removed here, but this will be fixed in future staging registries. 
+    def clean_skill(s):
+        return re.sub(r"^\s*[\d]+[.)]\s*", "", str(s)).strip()
+
+    def pluralize(n, word):
+        return f"{n} {word if n == 1 else word + 's'}"
+
+    def pct(part, whole, i): # Percentage calculation
+        if whole <= 0:
+            return "0%"
+        return (
+            f"{(part / whole) * 100:.0f}% of your skill base from the courses"
+            if i == 1
+            else f"{(part / whole) * 100:.0f}%" # Show the description, only for the first skill group
+        )
+
+    # Sort skill groups
+    total_count = sum(skill_groups.values())
+    top_groups = sorted(skill_groups.items(), key=lambda kv: kv[1], reverse=True)[:5]
+
+    # Build significant skills
+    group_lines = []
+    for i, (group, count) in enumerate(top_groups, start=1):
+        line1 = f"{i}. {group}"
+        line2 = f"   -> {pluralize(count, 'skill')} ({pct(count, total_count, i)})"
+        group_lines.append(f"{line1}\n{line2}\n")
+
+    sig_skills_block = "Significant skill areas:\n" + "\n".join(group_lines).rstrip()
+
+    # Build standout skills
+    seen = set()
+    standout = []
+    for s in skills:
+        cs = clean_skill(s)
+        if cs and cs.lower() not in seen:
+            seen.add(cs.lower())
+            standout.append(cs)
+        if len(standout) >= 5:
+            break
+
+    # Format standout list 
+    standout_sentence = ""
+    if standout:
+        quoted = [f"'{s}'" for s in standout]
+        if len(quoted) > 1:
+            quoted_str = ", ".join(quoted[:-1]) + f", and {quoted[-1]}"
+        else:
+            quoted_str = quoted[0]
+        standout_sentence = f" Some of your standout skills are {quoted_str}."
+
+    # Final 'totals' sentence
+    totals_sentence = ""
+    if course_ids or skills or skill_groups:
+        totals_sentence = (
+            f"\n\nOverall, we have analyzed {len(course_ids)} of your courses "
+            f"and found {len(skills)} skills! That's over a range of {len(skill_groups)} skill groups."
+        )
+        totals_sentence += standout_sentence
+
+    # Build the highlight
+    highlight = f"{summary}\n\n{sig_skills_block}{totals_sentence}".strip()
+
+
+    body["highlight"] = highlight
+    analysis_json["body"] = body
+    return analysis_json
+
 from time import perf_counter
 def _timeit(f):
     def wrap(*a, **kw):
@@ -185,7 +262,7 @@ def lambda_handler(event, context):
         }
 
     courses_skill_data = retrieve_course_skill_data(standerdized_course_ids, sd)
-    student_skills = [skill for course in courses_skill_data for skill in course["skills"]]
+    student_skills = list(set([skill for course in courses_skill_data for skill in course["skills"]])) # list(set(, insures that that there are no repeated skills
     student_skill_groups = sum_skill_groups([course["skill_groups"] for course in courses_skill_data])
     summary = chatgpt_summary(student_skills, student_skill_groups, [(course["title"], course["description"]) for course in courses_skill_data], summary_gpt_model)
 
@@ -198,4 +275,7 @@ def lambda_handler(event, context):
             "course_id_list": standerdized_course_ids
         })
     }
+
+    responce = add_highlight_to_analysis(responce) # Adds the new 'highlight' field, with a ready-to-print string.
+
     return response
