@@ -276,6 +276,6 @@ def lambda_handler(event, context):
         })
     }
 
-    responce = add_highlight_to_analysis(responce) # Adds the new 'highlight' field, with a ready-to-print string.
+    response = add_highlight_to_analysis(response) # Adds the new 'highlight' field, with a ready-to-print string.
 
     return response
