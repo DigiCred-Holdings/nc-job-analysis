@@ -147,14 +147,7 @@ def chatgpt_summary(skills, skill_groups, course_descriptions, model):
     summary = chatgpt_send_messages_json(prompt, json_schema, model, init_client())
     return summary["summary"]
 
-def add_highlight_to_analysis(analysis_json):
-    body = analysis_json["body"]
-
-    summary = (body["summary"]).strip()
-    skill_groups = body["student_skill_groups"] or {}
-    skills = body["student_skill_list"] or []
-    course_ids = body["course_id_list"] or []
-
+def compile_highlight(summary, skill_groups, skills, course_ids):
 
     # Because there was little testing period for the initial skill extraction, some skills contain defects, like starting with "15. ", they are removed here, but this will be fixed in future staging registries. 
     def clean_skill(s):
@@ -217,11 +210,7 @@ def add_highlight_to_analysis(analysis_json):
 
     # Build the highlight
     highlight = f"{summary}\n\n{sig_skills_block}{totals_sentence}".strip()
-
-
-    body["highlight"] = highlight
-    analysis_json["body"] = body
-    return analysis_json
+    return highlight
 
 from time import perf_counter
 def _timeit(f):
@@ -242,14 +231,14 @@ def lambda_handler(event, context):
     if not body:
         return {
             'statusCode': 400,
-            'body': json.dumps({'error': 'Invalid input: body cannot be empty.'})
+            'body': 'Invalid input: body cannot be empty.'
         }
     
     ()
     if "coursesList" not in body or "source" not in body:
         return {
             'statusCode': 400,
-            'body': json.dumps({'error': 'Invalid input: coursesList and source are required.'})
+            'body': 'Invalid input: coursesList and source are required.'
         }
 
 
@@ -258,13 +247,14 @@ def lambda_handler(event, context):
     if not standerdized_course_ids:
         return {
             'statusCode': 404,
-            'body': json.dumps({'error': 'No matching courses found.'})
+            'body': 'No matching courses found.'
         }
 
     courses_skill_data = retrieve_course_skill_data(standerdized_course_ids, sd)
     student_skills = list(set([skill for course in courses_skill_data for skill in course["skills"]])) # list(set(, insures that that there are no repeated skills
     student_skill_groups = sum_skill_groups([course["skill_groups"] for course in courses_skill_data])
     summary = chatgpt_summary(student_skills, student_skill_groups, [(course["title"], course["description"]) for course in courses_skill_data], summary_gpt_model)
+    highlight = compile_highlight(summary, student_skill_groups, student_skills, standerdized_course_ids)
 
     response = {
         'status': 200,
@@ -272,10 +262,8 @@ def lambda_handler(event, context):
             "summary": summary,
             "student_skill_list": student_skills,
             "student_skill_groups": student_skill_groups,
-            "course_id_list": standerdized_course_ids
+            "course_id_list": standerdized_course_ids,
+            "highlight": highlight
         }
     }
-
-    response = add_highlight_to_analysis(response) # Adds the new 'highlight' field, with a ready-to-print string.
-
     return response
