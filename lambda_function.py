@@ -268,12 +268,12 @@ def lambda_handler(event, context):
 
     response = {
         'status': 200,
-        'body': json.dumps({
+        'body': {
             "summary": summary,
             "student_skill_list": student_skills,
             "student_skill_groups": student_skill_groups,
             "course_id_list": standerdized_course_ids
-        })
+        }
     }
 
     response = add_highlight_to_analysis(response) # Adds the new 'highlight' field, with a ready-to-print string.
