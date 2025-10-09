@@ -20,8 +20,6 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v2
-        with:
-          fetch-depth: 2 # To fetch the current commit and its parent (so we can compare)
 
       - name: Setup AWS CLI
         uses: aws-actions/configure-aws-credentials@v1
