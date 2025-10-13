@@ -35,7 +35,10 @@ def get_course_data_from_db(course_title_code_list, school_name):
         QueryString=query,
         QueryExecutionContext={
             'Database': os.environ['ATHENA_DATABASE'],
-            'Catalog': "AwsDataCatalog"
+            'Catalog': os.environ['ATHENA_CATALOG']
+        },
+        resultConfiguration={
+            'OutputLocation': os.environ['ATHENA_OUTPUT_S3']
         }
     )
     print("Query execution started:", response)
