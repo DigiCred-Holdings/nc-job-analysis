@@ -8,15 +8,12 @@ import re
 
 def build_query(course_title_code_list, school_code):
     # Build the SQL query to fetch course data based on course titles and codes
-    
-    # TODO: Parameterize the query to prevent SQL injection
     query = f"""
     SELECT id, data_title, data_code, data_desc, dse_skills
     FROM courses
     WHERE data_src = '{school_code}'
-        AND data_code IN ({', '.join([f"'{code}'" for _, code in course_title_code_list])});
+        AND data_code IN ({', '.join(['?']*len(course_title_code_list))})
     """
-    
     return query
 
 def get_course_data_from_db(course_title_code_list, school_name):
@@ -37,9 +34,10 @@ def get_course_data_from_db(course_title_code_list, school_name):
             'Database': os.environ['ATHENA_DATABASE'],
             'Catalog': os.environ['ATHENA_CATALOG']
         },
-        resultConfiguration={
+        ResultConfiguration={
             'OutputLocation': os.environ['ATHENA_OUTPUT_S3']
-        }
+        },
+        ExecutionParameters=[code for _, code in course_title_code_list]
     )
     print("Query execution started:", response)
 
