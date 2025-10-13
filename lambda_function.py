@@ -12,8 +12,11 @@ def build_query(course_title_code_list, school_code):
     SELECT id, data_title, data_code, data_desc, dse_skills
     FROM courses
     WHERE data_src = '{school_code}'
-        AND data_code IN ({', '.join(['?']*len(course_title_code_list))})
+        AND data_code = '{course_title_code_list[0][1]}'
     """
+    #     AND data_code IN ({', '.join(['?']*len(course_title_code_list))})
+    # """
+    
     return query
 
 def get_course_data_from_db(course_title_code_list, school_name):
@@ -59,6 +62,7 @@ def get_course_data_from_db(course_title_code_list, school_name):
         print(result_data)
     else:
         print(f"Query failed in state: {state}")
+        print(response)
         return []
 
 def get_course_data(course_title_code_list, school_name):
