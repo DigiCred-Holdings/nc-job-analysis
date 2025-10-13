@@ -1,60 +1,80 @@
 import json
+import time
 import boto3
 from openai import OpenAI
 import os
 import re
 
 
-def load_skills_dataset():
-    s3_client = boto3.client('s3')
-    # Get bucket key from environment variable S3 URI e.g. s3://digicred-credential-analysis/dev/staging_registry.json
-    registry_uri = os.environ['REGISTRY_S3_URI']
-    bucket, key = registry_uri.replace("s3://", "").split("/", 1)
-    response = s3_client.get_object(Bucket=bucket, Key=key)
-    if response['ResponseMetadata']['HTTPStatusCode'] != 200:
-        raise Exception(f"Failed to retrieve data from S3: {response['ResponseMetadata']['HTTPStatusCode']}")
-    content = response['Body'].read().decode('utf-8')
-
-    return json.loads(content)
-
-def course_codes_match(code1, code2):
-    return str.lower(code1.strip()) == str.lower(code2.strip())
-
-def standardize_courses(courses_list, source, sd):
-    # Find the source abbreviation in the skills dataset
-    for code, alts in sd["lookup"]["universities"].items():
-        if str.lower(source) in [str.lower(alt) for alt in alts]:
-            src_code = code
-            break
+def build_query(course_title_code_list, school_code):
+    # Build the SQL query to fetch course data based on course titles and codes
     
-    # Filter the courses based on the source code
-    all_courses = [course for course in sd["C"] if course["data"]["src"] == src_code]
-    matches = []
-    for course in courses_list:
-        # Use the second element in the course list element as the course code
-        course_code = str.lower(course[1])
-        code_matches = [course for course in all_courses if course_codes_match(course["data"]["code"], course_code)]
-        if code_matches:
-            # If a match is found, return the course ID
-            matches.append(code_matches[0]["id"])
+    # TODO: Parameterize the query to prevent SQL injection
+    query = f"""
+    SELECT id, data_title, data_code, data_desc, dse_skills
+    FROM courses
+    WHERE data_src = '{school_code}'
+        AND data_code IN ({', '.join([f"'{code}'" for _, code in course_title_code_list])});
+    """
+    
+    return query
+
+def get_course_data_from_db(course_title_code_list, school_name):
+    client = boto3.client('athena')   # create athena client
+    
+    school_name_code_lookup = {
+        "university of wyoming": "UWYO",
+    }
+    
+    school_code = school_name_code_lookup.get(school_name.lower())
+    
+    query = build_query(course_title_code_list, school_code)
+    
+    # Start the Athena query execution
+    response = client.start_query_execution(
+        QueryString=query,
+        QueryExecutionContext={
+            'Database': os.environ['ATHENA_DATABASE']
+        }
+    )
+    print("Query execution started:", response)
+
+    query_execution_id = response['QueryExecutionId']
+    
+    while True:
+        response = client.get_query_execution(QueryExecutionId=query_execution_id)
+        state = response['QueryExecution']['Status']['State']
         
-    return matches
-
-def retrieve_course_skill_data(target_ids, sd):
-    course_skill_data = []
+        if state in ['SUCCEEDED', 'FAILED', 'CANCELLED']:  # (optional) checking the status 
+            break
+        
+        time.sleep(1)  # Poll every 1 seconds
     
-    for target_id in target_ids:
-        for course in sd["C"]:
-            if course["id"] == target_id: 
-                course_skill_data.append({
-                    "id": target_id,
-                    "title": course["data"]["title"],
-                    "code": course["data"]["code"],
-                    "description": course["data"]["desc"],
-                    "skills": course["dse"]["skills"],
-                    "skill_groups":  course["dse"]["skill_groups"][0][0]
-                })
-    return course_skill_data
+    # Here, you can handle the response as per your requirement
+    if state == 'SUCCEEDED':
+        # Fetch the results if necessary
+        result_data = client.get_query_results(QueryExecutionId=query_execution_id)
+        print(result_data)
+    else:
+        print(f"Query failed in state: {state}")
+        return []
+
+def get_course_data(course_title_code_list, school_name):
+    db_response = get_course_data_from_db(course_title_code_list, school_name)
+    return db_response
+    
+    # for target_id in target_ids:
+    #     for course in sd["C"]:
+    #         if course["id"] == target_id: 
+    #             course_skill_data.append({
+    #                 "id": target_id,
+    #                 "title": course["data"]["title"],
+    #                 "code": course["data"]["code"],
+    #                 "description": course["data"]["desc"],
+    #                 "skills": course["dse"]["skills"],
+    #                 "skill_groups":  course["dse"]["skill_groups"][0][0]
+    #             })
+    # return course_skill_data
 
 def sum_skill_groups(skill_groups):
     summed_skill_groups = {}
@@ -240,21 +260,15 @@ def lambda_handler(event, context):
             'statusCode': 400,
             'body': 'Invalid input: coursesList and source are required.'
         }
+        
 
-
-    sd = load_skills_dataset()
-    standerdized_course_ids = standardize_courses(body["coursesList"], body["source"], sd)
-    if not standerdized_course_ids:
-        return {
-            'statusCode': 404,
-            'body': 'No matching courses found.'
-        }
-
-    courses_skill_data = retrieve_course_skill_data(standerdized_course_ids, sd)
+    courses_skill_data = get_course_data(body["coursesList"], body["source"])
     student_skills = list(set([skill for course in courses_skill_data for skill in course["skills"]])) # list(set(, insures that that there are no repeated skills
     student_skill_groups = sum_skill_groups([course["skill_groups"] for course in courses_skill_data])
     summary = chatgpt_summary(student_skills, student_skill_groups, [(course["title"], course["description"]) for course in courses_skill_data], summary_gpt_model)
-    highlight = compile_highlight(summary, student_skill_groups, student_skills, standerdized_course_ids)
+    
+    analyzed_course_ids = [course["id"] for course in courses_skill_data]
+    highlight = compile_highlight(summary, student_skill_groups, student_skills, analyzed_course_ids)
 
     response = {
         'status': 200,
@@ -262,7 +276,7 @@ def lambda_handler(event, context):
             "summary": summary,
             "student_skill_list": student_skills,
             "student_skill_groups": student_skill_groups,
-            "course_id_list": standerdized_course_ids,
+            "course_id_list": analyzed_course_ids,
             "highlight": highlight
         }
     }
