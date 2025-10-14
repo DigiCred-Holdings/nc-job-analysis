@@ -78,17 +78,12 @@ def get_course_data(course_title_code_list, school_name):
         code_matches = [course for course in db_courses if course['data_code'] == course_code]
         if code_matches:
             course = code_matches[0]  # Take the first match if multiple
-            if 'dse_skills' in course and course['dse_skills']:
-                print("dse_skills:", course['dse_skills'])
-                skills = json.loads(course['dse_skills'])
-            else:
-                skills = []
             course_skill_data.append({
                 "id": course['id'],
                 "title": course['data_title'],
                 "code": course['data_code'],
                 "description": course['data_desc'],
-                "skills": skills
+                "skills": course['dse_skills']
             })
     
     print(f"Fetched {len(course_skill_data)} courses with skills from DB.")
