@@ -83,7 +83,7 @@ def get_course_data(course_title_code_list, school_name):
                 "title": course['data_title'],
                 "code": course['data_code'],
                 "description": course['data_desc'],
-                "skills": course['dse_skills']
+                "skills": course['dse_skills'].strip("[]").split(", ") if course['dse_skills'] else []
             })
     
     print(f"Fetched {len(course_skill_data)} courses with skills from DB.")
@@ -123,8 +123,9 @@ def chatgpt_send_messages_json(messages, json_schema_wrapper, client):
     return json.loads(json_response_content)
 
 
-def get_prompt_plus_schema(course_skills_data, all_student_skills): # Could be saved separately or in s3?
+def get_prompt_plus_schema(course_skills_data): # Could be saved separately or in s3?
     course_descriptions = [(course["title"], course["description"]) for course in course_skills_data]
+    skills_by_course = [(course["title"], course["skills"]) for course in course_skills_data]
     prompt = [
         {"role": "system", "content": '''
             You are summarizing a university-level student's abilities and skills.
@@ -136,17 +137,14 @@ def get_prompt_plus_schema(course_skills_data, all_student_skills): # Could be s
             - Write a short summary (max 3 sentences) of the student's strengths.
             - Mention at least one notable skill group they excel in.
             - Highlight at least one specific skill learned in a course (referencing course context).
-            - Keep the tone positive, in the style of: "You excel greatly in ..., most notably your accounting class taught you ..."
+            - Keep the tone positive, in the style of: "Your coursework has given you skills in ... Notably your accounting class taught you ..."
             - Avoid lists; keep it narrative and concise.
 
             Output only the 3-sentence summary.
-            
-            Example output:
-            "You excel greatly in business, administration, and law, most notably your accounting courses taught you to analyze and interpret financial information effectively. Your strength in applying accounting systems and software, such as general ledger and payroll software, stands out. The 'Accounting Software Applications' course specifically enhanced your ability to use accounting packages to solve complex problems efficiently."
         '''},
         {"role": "user", "content": f'''
             1) {course_descriptions}
-            2) {all_student_skills}
+            2) {skills_by_course}
         '''}
     ]
 
@@ -170,46 +168,44 @@ def get_prompt_plus_schema(course_skills_data, all_student_skills): # Could be s
     return prompt, json_schema
 
 
-def chatgpt_summary(course_skills_data, all_student_skills):
-    prompt, json_schema = get_prompt_plus_schema(course_skills_data, all_student_skills)
+def chatgpt_summary(course_skills_data):
+    prompt, json_schema = get_prompt_plus_schema(course_skills_data)
     summary = chatgpt_send_messages_json(prompt, json_schema, init_client())
     return summary["summary"]
 
-def compile_highlight(summary, skills, course_ids):
+def compile_highlight(summary, course_skills_data):
 
-    # Because there was little testing period for the initial skill extraction, some skills contain defects, like starting with "15. ", they are removed here, but this will be fixed in future staging registries. 
+    # Helper to clean skill strings of leading numbers/formatting
     def clean_skill(s):
         return re.sub(r"^\s*[\d]+[.)]\s*", "", str(s)).strip()
 
-    # Build standout skills
-    seen = set()
-    standout = []
-    for s in skills:
-        cs = clean_skill(s)
-        if cs and cs.lower() not in seen:
-            seen.add(cs.lower())
-            standout.append(cs)
-        if len(standout) >= 5:
-            break
+    # Build a list of standout skills by selecting the most common skills across courses
+    skill_counts = {}
+    for course in course_skills_data:
+        skills = [clean_skill(s) for s in course["skills"]]
+        for skill in skills:
+            skill_counts[skill] = skill_counts.get(skill, 0) + 1
 
+    # Pick the top 3 most common skills as standout skills
+    sorted_skills = sorted(skill_counts.items(), key=lambda item: item[1], reverse=True)
+    top_3_skills = [s[0] for s in sorted_skills[:3]]
+    
     # Format standout list 
     standout_sentence = ""
-    if standout:
-        quoted = [f"'{s}'" for s in standout]
-        if len(quoted) > 1:
-            quoted_str = ", ".join(quoted[:-1]) + f", and {quoted[-1]}"
-        else:
-            quoted_str = quoted[0]
-        standout_sentence = f" Some of your standout skills are {quoted_str}."
+    quoted = [f"'{s}'" for s in top_3_skills]
+    if len(quoted) > 1:
+        quoted_str = ", ".join(quoted[:-1]) + f", and {quoted[-1]}"
+    else:
+        quoted_str = quoted[0]
+    standout_sentence = f" Some of your standout skills are {quoted_str}."
 
     # Final 'totals' sentence
     totals_sentence = ""
-    if course_ids or skills:
-        totals_sentence = (
-            f"\n\nOverall, we have analyzed {len(course_ids)} of your courses "
-            f"and found {len(skills)} skills!"
-        )
-        totals_sentence += standout_sentence
+    totals_sentence = (
+        f"\n\nOverall, we have analyzed {len(course_skills_data)} of your courses "
+        f"and found {len(skill_counts.keys())} skills!"
+    )
+    totals_sentence += standout_sentence
 
     # Build the highlight
     highlight = f"{summary}\n\n{totals_sentence}".strip()
@@ -244,20 +240,16 @@ def lambda_handler(event, context):
         
 
     course_skills_data = get_course_data(body["coursesList"], body["source"])
-    student_skills = list(set(
-        [skill for course in course_skills_data for skill in course["skills"].strip("[]").split(", ")]
-    ))
-    summary = chatgpt_summary(course_skills_data, student_skills)
+    summary = chatgpt_summary(course_skills_data)
+    
+    highlight = compile_highlight(summary, course_skills_data)
     
     analyzed_course_ids = [course["id"] for course in course_skills_data]
-    highlight = compile_highlight(summary, student_skills, analyzed_course_ids)
-
     response = {
         'status': 200,
         'body': {
             "summary": summary,
-            "student_skill_list": student_skills,
-            "course_id_list": analyzed_course_ids,
+            "course_ids": analyzed_course_ids,
             "highlight": highlight
         }
     }
