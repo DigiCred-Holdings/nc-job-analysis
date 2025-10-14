@@ -1,70 +1,99 @@
 import json
+import time
 import boto3
 from openai import OpenAI
 import os
 import re
 
 
-def load_skills_dataset():
-    s3_client = boto3.client('s3')
-    # Get bucket key from environment variable S3 URI e.g. s3://digicred-credential-analysis/dev/staging_registry.json
-    registry_uri = os.environ['REGISTRY_S3_URI']
-    bucket, key = registry_uri.replace("s3://", "").split("/", 1)
-    response = s3_client.get_object(Bucket=bucket, Key=key)
-    if response['ResponseMetadata']['HTTPStatusCode'] != 200:
-        raise Exception(f"Failed to retrieve data from S3: {response['ResponseMetadata']['HTTPStatusCode']}")
-    content = response['Body'].read().decode('utf-8')
+def build_query(course_title_code_list, school_code):
+    # Build the SQL query to fetch course data based on course titles and codes
+    query = f"""
+    SELECT id, data_title, data_code, data_desc, dse_skills
+    FROM courses
+    WHERE data_src = '{school_code}'
+        AND data_code IN ({', '.join(['?']*len(course_title_code_list))})
+    """
+    return query
 
-    return json.loads(content)
+# Helper function to extract VarCharValue from Athena query result
+def get_var_char_values(d):
+    return [obj['VarCharValue'] for obj in d['Data']]
 
-def course_codes_match(code1, code2):
-    return str.lower(code1.strip()) == str.lower(code2.strip())
-
-def standardize_courses(courses_list, source, sd):
-    # Find the source abbreviation in the skills dataset
-    for code, alts in sd["lookup"]["universities"].items():
-        if str.lower(source) in [str.lower(alt) for alt in alts]:
-            src_code = code
-            break
+def get_course_data_from_db(course_title_code_list, school_name):
+    client = boto3.client('athena')   # create athena client
     
-    # Filter the courses based on the source code
-    all_courses = [course for course in sd["C"] if course["data"]["src"] == src_code]
-    matches = []
-    for course in courses_list:
-        # Use the second element in the course list element as the course code
-        course_code = str.lower(course[1])
-        code_matches = [course for course in all_courses if course_codes_match(course["data"]["code"], course_code)]
-        if code_matches:
-            # If a match is found, return the course ID
-            matches.append(code_matches[0]["id"])
-        
-    return matches
+    school_name_code_lookup = {
+        "university of wyoming": "UWYO",
+    }
+    school_code = school_name_code_lookup.get(school_name.lower())
+    
+    query = build_query(course_title_code_list, school_code)
+    
+    print("Executing query on school code:", school_code)
+    # Start the Athena query execution
+    start_query_response = client.start_query_execution(
+        QueryString=query,
+        QueryExecutionContext={
+            'Database': os.environ['ATHENA_DATABASE']
+        },
+        ResultConfiguration={
+            'OutputLocation': os.environ['ATHENA_OUTPUT_S3']
+        },
+        ExecutionParameters=[code for _, code in course_title_code_list]
+    )
+    print("Query execution started:", start_query_response)
 
-def retrieve_course_skill_data(target_ids, sd):
+    query_execution_id = start_query_response['QueryExecutionId']
+    
+    # Poll the query status until it completes
+    while True:
+        status_response = client.get_query_execution(QueryExecutionId=query_execution_id)
+        state = status_response['QueryExecution']['Status']['State']
+        reason = status_response['QueryExecution']
+        
+        if state == 'SUCCEEDED':
+            break
+        elif state in ['FAILED', 'CANCELLED']:
+            raise Exception(f"Query {state}: {reason}")
+        
+        time.sleep(0.2)  # Poll every 0.2 seconds
+        
+    results_response = client.get_query_results(QueryExecutionId=query_execution_id)
+    
+    if not results_response or 'ResultSet' not in results_response or 'Rows' not in results_response['ResultSet']:
+        return []
+ 
+    # Unpack the results into a list of dictionaries, using the header row as keys
+    header, *rows = results_response['ResultSet']['Rows']
+    header = get_var_char_values(header)
+    unpacked_results = [dict(zip(header, get_var_char_values(row))) for row in rows]    
+    return unpacked_results
+
+def get_course_data(course_title_code_list, school_name):
+    db_courses = get_course_data_from_db(course_title_code_list, school_name)
     course_skill_data = []
     
-    for target_id in target_ids:
-        for course in sd["C"]:
-            if course["id"] == target_id: 
-                course_skill_data.append({
-                    "id": target_id,
-                    "title": course["data"]["title"],
-                    "code": course["data"]["code"],
-                    "description": course["data"]["desc"],
-                    "skills": course["dse"]["skills"],
-                    "skill_groups":  course["dse"]["skill_groups"][0][0]
-                })
+    for _, course_code in course_title_code_list:
+        code_matches = [course for course in db_courses if course['data_code'] == course_code]
+        if code_matches:
+            course = code_matches[0]  # Take the first match if multiple
+            course_skill_data.append({
+                "id": course['id'],
+                "title": course['data_title'],
+                "code": course['data_code'],
+                "description": course['data_desc'],
+                "skills": course['dse_skills'].strip("[]").split(", ") if course['dse_skills'] else []
+            })
+    
+    print(f"Fetched {len(course_skill_data)} courses with skills from DB.")
+    
+    if len(course_skill_data) < len(course_title_code_list):
+        missing_count = len(course_title_code_list) - len(course_skill_data)
+        missing_codes = set(code for _, code in course_title_code_list) - set(course['code'] for course in course_skill_data)
+        print(f"Warning: {missing_count} courses were not found in the database. Missing codes: {missing_codes}")
+    
     return course_skill_data
-
-def sum_skill_groups(skill_groups):
-    summed_skill_groups = {}
-
-    for d in skill_groups:
-        for key, value in d.items():
-            summed_skill_groups[key] = summed_skill_groups.get(key, 0) + value
-
-    return summed_skill_groups
-
 
 ### OPENAI API RELATED ###
 
@@ -76,9 +105,9 @@ def init_client():
     api_key = json.loads(secret_string).get('OPENAI_API_KEY')
     return OpenAI(api_key=api_key)
 
-def chatgpt_send_messages_json(messages, json_schema_wrapper, model, client):
+def chatgpt_send_messages_json(messages, json_schema_wrapper, client):
     json_response = client.chat.completions.create(
-        model=model,
+        model=os.environ.get('OPENAI_GPT_MODEL', 'gpt-4.1-nano'),
         messages=messages,
         response_format={
             "type": "json_schema",
@@ -94,31 +123,28 @@ def chatgpt_send_messages_json(messages, json_schema_wrapper, model, client):
     return json.loads(json_response_content)
 
 
-def get_prompt_plus_schema(skills, skill_groups, course_descriptions): # Could be saved seperetely or in s3?
+def get_prompt_plus_schema(course_skills_data): # Could be saved separately or in s3?
+    course_descriptions = [(course["title"], course["description"]) for course in course_skills_data]
+    skills_by_course = [(course["title"], course["skills"]) for course in course_skills_data]
     prompt = [
         {"role": "system", "content": '''
             You are summarizing a university-level student's abilities and skills.
             You will receive:
-            1) A list of individual skills the student has mastered
-            2) A list of skill groups with their counts as an object
-            3) A list of completed courses with descriptions
+            1) A list of completed courses with descriptions
+            2) A list of skills associated with those courses
 
             Your task:
-            - Write a short summary (max 3 sentences) of the student’s strengths.
+            - Write a short summary (max 3 sentences) of the student's strengths.
             - Mention at least one notable skill group they excel in.
             - Highlight at least one specific skill learned in a course (referencing course context).
-            - Keep the tone positive, in the style of: "You excel greatly in ..., most notably your accounting class taught you ..."
+            - Keep the tone positive, in the style of: "Your coursework has given you skills in ... Notably your accounting class taught you ..."
             - Avoid lists; keep it narrative and concise.
 
             Output only the 3-sentence summary.
-            
-            Example output:
-            "You excel greatly in business, administration, and law, most notably your accounting courses taught you to analyze and interpret financial information effectively. Your strength in applying accounting systems and software, such as general ledger and payroll software, stands out. The 'Accounting Software Applications' course specifically enhanced your ability to use accounting packages to solve complex problems efficiently."
         '''},
         {"role": "user", "content": f'''
-            1) {skills}
-            2) {skill_groups}
-            3) {course_descriptions}
+            1) {course_descriptions}
+            2) {skills_by_course}
         '''}
     ]
 
@@ -129,7 +155,7 @@ def get_prompt_plus_schema(skills, skill_groups, course_descriptions): # Could b
             "properties": {
                 "summary": {
                     "type": "string",
-                    "description": "A short positive narrative summary of the student's strengths, maximum 3 sentences (~170 tokens).",
+                    "description": "A short positive narrative summary of the student's strengths.",
                     "maxLength": 1200,
                     "pattern": r"^([^.!?]*[.!?]){1,3}$"
                 }
@@ -142,74 +168,47 @@ def get_prompt_plus_schema(skills, skill_groups, course_descriptions): # Could b
     return prompt, json_schema
 
 
-def chatgpt_summary(skills, skill_groups, course_descriptions, model):
-    prompt, json_schema = get_prompt_plus_schema(skills, skill_groups, course_descriptions)
-    summary = chatgpt_send_messages_json(prompt, json_schema, model, init_client())
+def chatgpt_summary(course_skills_data):
+    prompt, json_schema = get_prompt_plus_schema(course_skills_data)
+    summary = chatgpt_send_messages_json(prompt, json_schema, init_client())
     return summary["summary"]
 
-def compile_highlight(summary, skill_groups, skills, course_ids):
+def compile_highlight(summary, course_skills_data):
 
-    # Because there was little testing period for the initial skill extraction, some skills contain defects, like starting with "15. ", they are removed here, but this will be fixed in future staging registries. 
+    # Helper to clean skill strings of leading numbers/formatting
     def clean_skill(s):
         return re.sub(r"^\s*[\d]+[.)]\s*", "", str(s)).strip()
 
-    def pluralize(n, word):
-        return f"{n} {word if n == 1 else word + 's'}"
+    # Build a list of standout skills by selecting the most common skills across courses
+    skill_counts = {}
+    for course in course_skills_data:
+        skills = [clean_skill(s) for s in course["skills"]]
+        for skill in skills:
+            skill_counts[skill] = skill_counts.get(skill, 0) + 1
 
-    def pct(part, whole, i): # Percentage calculation
-        if whole <= 0:
-            return "0%"
-        return (
-            f"{(part / whole) * 100:.0f}% of your skill base from the courses"
-            if i == 1
-            else f"{(part / whole) * 100:.0f}%" # Show the description, only for the first skill group
-        )
-
-    # Sort skill groups
-    total_count = sum(skill_groups.values())
-    top_groups = sorted(skill_groups.items(), key=lambda kv: kv[1], reverse=True)[:5]
-
-    # Build significant skills
-    group_lines = []
-    for i, (group, count) in enumerate(top_groups, start=1):
-        line1 = f"{i}. {group}"
-        line2 = f"   -> {pluralize(count, 'skill')} ({pct(count, total_count, i)})"
-        group_lines.append(f"{line1}\n{line2}\n")
-
-    sig_skills_block = "Significant skill areas:\n" + "\n".join(group_lines).rstrip()
-
-    # Build standout skills
-    seen = set()
-    standout = []
-    for s in skills:
-        cs = clean_skill(s)
-        if cs and cs.lower() not in seen:
-            seen.add(cs.lower())
-            standout.append(cs)
-        if len(standout) >= 5:
-            break
-
+    # Pick the top 3 most common skills as standout skills
+    sorted_skills = sorted(skill_counts.items(), key=lambda item: item[1], reverse=True)
+    top_3_skills = [s[0] for s in sorted_skills[:3]]
+    
     # Format standout list 
     standout_sentence = ""
-    if standout:
-        quoted = [f"'{s}'" for s in standout]
-        if len(quoted) > 1:
-            quoted_str = ", ".join(quoted[:-1]) + f", and {quoted[-1]}"
-        else:
-            quoted_str = quoted[0]
-        standout_sentence = f" Some of your standout skills are {quoted_str}."
+    quoted = [f"'{s}'" for s in top_3_skills]
+    if len(quoted) > 1:
+        quoted_str = ", ".join(quoted[:-1]) + f", and {quoted[-1]}"
+    else:
+        quoted_str = quoted[0]
+    standout_sentence = f" Some of your standout skills are {quoted_str}."
 
     # Final 'totals' sentence
     totals_sentence = ""
-    if course_ids or skills or skill_groups:
-        totals_sentence = (
-            f"\n\nOverall, we have analyzed {len(course_ids)} of your courses "
-            f"and found {len(skills)} skills! That's over a range of {len(skill_groups)} skill groups."
-        )
-        totals_sentence += standout_sentence
+    totals_sentence = (
+        f"Overall, we have analyzed {len(course_skills_data)} of your courses "
+        f"and found {len(skill_counts.keys())} skills!"
+    )
+    totals_sentence += standout_sentence
 
     # Build the highlight
-    highlight = f"{summary}\n\n{sig_skills_block}{totals_sentence}".strip()
+    highlight = f"{summary}\n\n{totals_sentence}".strip()
     return highlight
 
 from time import perf_counter
@@ -222,8 +221,6 @@ def _timeit(f):
 
 @_timeit
 def lambda_handler(event, context):
-    summary_gpt_model = "gpt-4.1-nano"
-
     if type(event["body"]) is str:
         body = json.loads(event["body"])
     else:
@@ -240,29 +237,19 @@ def lambda_handler(event, context):
             'statusCode': 400,
             'body': 'Invalid input: coursesList and source are required.'
         }
+        
 
-
-    sd = load_skills_dataset()
-    standerdized_course_ids = standardize_courses(body["coursesList"], body["source"], sd)
-    if not standerdized_course_ids:
-        return {
-            'statusCode': 404,
-            'body': 'No matching courses found.'
-        }
-
-    courses_skill_data = retrieve_course_skill_data(standerdized_course_ids, sd)
-    student_skills = list(set([skill for course in courses_skill_data for skill in course["skills"]])) # list(set(, insures that that there are no repeated skills
-    student_skill_groups = sum_skill_groups([course["skill_groups"] for course in courses_skill_data])
-    summary = chatgpt_summary(student_skills, student_skill_groups, [(course["title"], course["description"]) for course in courses_skill_data], summary_gpt_model)
-    highlight = compile_highlight(summary, student_skill_groups, student_skills, standerdized_course_ids)
-
+    course_skills_data = get_course_data(body["coursesList"], body["source"])
+    summary = chatgpt_summary(course_skills_data)
+    
+    highlight = compile_highlight(summary, course_skills_data)
+    
+    analyzed_course_ids = [course["id"] for course in course_skills_data]
     response = {
         'status': 200,
         'body': {
             "summary": summary,
-            "student_skill_list": student_skills,
-            "student_skill_groups": student_skill_groups,
-            "course_id_list": standerdized_course_ids,
+            "course_ids": analyzed_course_ids,
             "highlight": highlight
         }
     }
