@@ -23,7 +23,6 @@ def get_course_data_from_db(course_title_code_list, school_name):
     school_name_code_lookup = {
         "university of wyoming": "UWYO",
     }
-    
     school_code = school_name_code_lookup.get(school_name.lower())
     
     query = build_query(course_title_code_list, school_code)
@@ -43,6 +42,7 @@ def get_course_data_from_db(course_title_code_list, school_name):
 
     query_execution_id = response['QueryExecutionId']
     
+    # Poll the query status until it completes
     while True:
         response = client.get_query_execution(QueryExecutionId=query_execution_id)
         state = response['QueryExecution']['Status']['State']
@@ -51,16 +51,26 @@ def get_course_data_from_db(course_title_code_list, school_name):
         if state in ['SUCCEEDED', 'FAILED', 'CANCELLED']:  # (optional) checking the status 
             break
         
-        time.sleep(1)  # Poll every 1 seconds
+        time.sleep(0.2)  # Poll every 0.2 seconds
     
     # Here, you can handle the response as per your requirement
     if state == 'SUCCEEDED':
         # Fetch the results if necessary
         result_data = client.get_query_results(QueryExecutionId=query_execution_id)
-        print(result_data)
     else:
         raise Exception(f"Query exited in state {state}:\n{reason}")
-        
+    
+    if not result_data or 'ResultSet' not in result_data or 'Rows' not in result_data['ResultSet']:
+        return []
+ 
+    header, *rows = result_data['ResultSet']['Rows']
+    header = get_var_char_values(header)
+    unzipped_data = [dict(zip(header, get_var_char_values(row))) for row in rows]
+    print(unzipped_data)
+    return unzipped_data
+    
+def get_var_char_values(d):
+    return [obj['VarCharValue'] for obj in d['Data']]
 
 def get_course_data(course_title_code_list, school_name):
     db_response = get_course_data_from_db(course_title_code_list, school_name)
