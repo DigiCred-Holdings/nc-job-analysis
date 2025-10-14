@@ -79,6 +79,7 @@ def get_course_data(course_title_code_list, school_name):
         if code_matches:
             course = code_matches[0]  # Take the first match if multiple
             if 'dse_skills' in course and course['dse_skills']:
+                print("dse_skills:", course['dse_skills'])
                 skills = json.loads(course['dse_skills'])
             else:
                 skills = []
