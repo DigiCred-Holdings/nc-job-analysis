@@ -296,6 +296,7 @@ def lambda_handler(event, context):
         
 
     courses_skill_data = get_course_data(body["coursesList"], body["source"])
+    print(f"Course skill data: {courses_skill_data}")
     student_skills = list(set([skill for course in courses_skill_data for skill in course["skills"]])) # list(set(, insures that that there are no repeated skills
     student_skill_groups = sum_skill_groups([course["skill_groups"] for course in courses_skill_data])
     summary = chatgpt_summary(student_skills, student_skill_groups, [(course["title"], course["description"]) for course in courses_skill_data], summary_gpt_model)
