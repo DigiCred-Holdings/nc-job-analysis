@@ -14,8 +14,11 @@ def build_query(course_title_code_list, school_code):
     WHERE data_src = '{school_code}'
         AND data_code IN ({', '.join(['?']*len(course_title_code_list))})
     """
-    
     return query
+
+# Helper function to extract VarCharValue from Athena query result
+def get_var_char_values(d):
+    return [obj['VarCharValue'] for obj in d['Data']]
 
 def get_course_data_from_db(course_title_code_list, school_name):
     client = boto3.client('athena')   # create athena client
@@ -27,8 +30,9 @@ def get_course_data_from_db(course_title_code_list, school_name):
     
     query = build_query(course_title_code_list, school_code)
     
+    print("Executing query on school code:", school_code)
     # Start the Athena query execution
-    response = client.start_query_execution(
+    start_query_response = client.start_query_execution(
         QueryString=query,
         QueryExecutionContext={
             'Database': os.environ['ATHENA_DATABASE']
@@ -38,43 +42,60 @@ def get_course_data_from_db(course_title_code_list, school_name):
         },
         ExecutionParameters=[code for _, code in course_title_code_list]
     )
-    print("Query execution started:", response)
+    print("Query execution started:", start_query_response)
 
-    query_execution_id = response['QueryExecutionId']
+    query_execution_id = start_query_response['QueryExecutionId']
     
     # Poll the query status until it completes
     while True:
-        response = client.get_query_execution(QueryExecutionId=query_execution_id)
-        state = response['QueryExecution']['Status']['State']
-        reason = response['QueryExecution']
+        status_response = client.get_query_execution(QueryExecutionId=query_execution_id)
+        state = status_response['QueryExecution']['Status']['State']
+        reason = status_response['QueryExecution']
         
-        if state in ['SUCCEEDED', 'FAILED', 'CANCELLED']:  # (optional) checking the status 
+        if state == 'SUCCEEDED':
             break
+        elif state in ['FAILED', 'CANCELLED']:
+            raise Exception(f"Query {state}: {reason}")
         
         time.sleep(0.2)  # Poll every 0.2 seconds
+        
+    results_response = client.get_query_results(QueryExecutionId=query_execution_id)
     
-    # Here, you can handle the response as per your requirement
-    if state == 'SUCCEEDED':
-        # Fetch the results if necessary
-        result_data = client.get_query_results(QueryExecutionId=query_execution_id)
-    else:
-        raise Exception(f"Query exited in state {state}:\n{reason}")
-    
-    if not result_data or 'ResultSet' not in result_data or 'Rows' not in result_data['ResultSet']:
+    if not results_response or 'ResultSet' not in results_response or 'Rows' not in results_response['ResultSet']:
         return []
  
-    header, *rows = result_data['ResultSet']['Rows']
+    # Unpack the results into a list of dictionaries, using the header row as keys
+    header, *rows = results_response['ResultSet']['Rows']
     header = get_var_char_values(header)
-    unzipped_data = [dict(zip(header, get_var_char_values(row))) for row in rows]
-    print(unzipped_data)
-    return unzipped_data
-    
-def get_var_char_values(d):
-    return [obj['VarCharValue'] for obj in d['Data']]
+    unpacked_results = [dict(zip(header, get_var_char_values(row))) for row in rows]    
+    return unpacked_results
 
 def get_course_data(course_title_code_list, school_name):
-    db_response = get_course_data_from_db(course_title_code_list, school_name)
-    return db_response
+    db_courses = get_course_data_from_db(course_title_code_list, school_name)
+    course_skill_data = []
+    
+    for _, course_code in course_title_code_list:
+        code_matches = [course for course in db_courses if course['data_code'] == course_code]
+        if code_matches:
+            course = code_matches[0]  # Take the first match if multiple
+            skills = json.loads(course['dse_skills'])
+            course_skill_data.append({
+                "id": course['id'],
+                "title": course['data_title'],
+                "code": course['data_code'],
+                "description": course['data_desc'],
+                "skills": skills
+            })
+    
+    print(f"Fetched {len(course_skill_data)} courses with skills from DB.")
+    
+    if len(course_skill_data) < len(course_title_code_list):
+        missing_count = len(course_title_code_list) - len(course_skill_data)
+        missing_codes = set(code for _, code in course_title_code_list) - set(course['code'] for course in course_skill_data)
+        print(f"Warning: {missing_count} courses were not found in the database. Missing codes: {missing_codes}")
+    
+    return course_skill_data
+        
     
     # for target_id in target_ids:
     #     for course in sd["C"]:
