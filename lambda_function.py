@@ -202,7 +202,7 @@ def compile_highlight(summary, course_skills_data):
     # Final 'totals' sentence
     totals_sentence = ""
     totals_sentence = (
-        f"\n\nOverall, we have analyzed {len(course_skills_data)} of your courses "
+        f"Overall, we have analyzed {len(course_skills_data)} of your courses "
         f"and found {len(skill_counts.keys())} skills!"
     )
     totals_sentence += standout_sentence
