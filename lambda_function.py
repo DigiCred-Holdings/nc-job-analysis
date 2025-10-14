@@ -12,10 +12,8 @@ def build_query(course_title_code_list, school_code):
     SELECT id, data_title, data_code, data_desc, dse_skills
     FROM courses
     WHERE data_src = '{school_code}'
-        AND data_code = '{course_title_code_list[0][1]}'
+        AND data_code IN ({', '.join(['?']*len(course_title_code_list))})
     """
-    #     AND data_code IN ({', '.join(['?']*len(course_title_code_list))})
-    # """
     
     return query
 
