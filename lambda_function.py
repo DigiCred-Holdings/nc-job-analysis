@@ -94,20 +94,6 @@ def get_course_data(course_title_code_list, school_name):
         print(f"Warning: {missing_count} courses were not found in the database. Missing codes: {missing_codes}")
     
     return course_skill_data
-        
-    
-    # for target_id in target_ids:
-    #     for course in sd["C"]:
-    #         if course["id"] == target_id: 
-    #             course_skill_data.append({
-    #                 "id": target_id,
-    #                 "title": course["data"]["title"],
-    #                 "code": course["data"]["code"],
-    #                 "description": course["data"]["desc"],
-    #                 "skills": course["dse"]["skills"],
-    #                 "skill_groups":  course["dse"]["skill_groups"][0][0]
-    #             })
-    # return course_skill_data
 
 def sum_skill_groups(skill_groups):
     summed_skill_groups = {}
@@ -147,17 +133,16 @@ def chatgpt_send_messages_json(messages, json_schema_wrapper, model, client):
     return json.loads(json_response_content)
 
 
-def get_prompt_plus_schema(skills, skill_groups, course_descriptions): # Could be saved seperetely or in s3?
+def get_prompt_plus_schema(skills, course_descriptions): # Could be saved separately or in s3?
     prompt = [
         {"role": "system", "content": '''
             You are summarizing a university-level student's abilities and skills.
             You will receive:
-            1) A list of individual skills the student has mastered
-            2) A list of skill groups with their counts as an object
-            3) A list of completed courses with descriptions
+            1) A list of completed courses with descriptions
+            2) A list of skills associated with those courses
 
             Your task:
-            - Write a short summary (max 3 sentences) of the student’s strengths.
+            - Write a short summary (max 3 sentences) of the student's strengths.
             - Mention at least one notable skill group they excel in.
             - Highlight at least one specific skill learned in a course (referencing course context).
             - Keep the tone positive, in the style of: "You excel greatly in ..., most notably your accounting class taught you ..."
@@ -169,9 +154,8 @@ def get_prompt_plus_schema(skills, skill_groups, course_descriptions): # Could b
             "You excel greatly in business, administration, and law, most notably your accounting courses taught you to analyze and interpret financial information effectively. Your strength in applying accounting systems and software, such as general ledger and payroll software, stands out. The 'Accounting Software Applications' course specifically enhanced your ability to use accounting packages to solve complex problems efficiently."
         '''},
         {"role": "user", "content": f'''
-            1) {skills}
-            2) {skill_groups}
-            3) {course_descriptions}
+            1) {course_descriptions}
+            2) {skills}
         '''}
     ]
 
@@ -182,7 +166,7 @@ def get_prompt_plus_schema(skills, skill_groups, course_descriptions): # Could b
             "properties": {
                 "summary": {
                     "type": "string",
-                    "description": "A short positive narrative summary of the student's strengths, maximum 3 sentences (~170 tokens).",
+                    "description": "A short positive narrative summary of the student's strengths.",
                     "maxLength": 1200,
                     "pattern": r"^([^.!?]*[.!?]){1,3}$"
                 }
@@ -195,41 +179,16 @@ def get_prompt_plus_schema(skills, skill_groups, course_descriptions): # Could b
     return prompt, json_schema
 
 
-def chatgpt_summary(skills, skill_groups, course_descriptions, model):
-    prompt, json_schema = get_prompt_plus_schema(skills, skill_groups, course_descriptions)
+def chatgpt_summary(skills, course_descriptions, model):
+    prompt, json_schema = get_prompt_plus_schema(skills, course_descriptions)
     summary = chatgpt_send_messages_json(prompt, json_schema, model, init_client())
     return summary["summary"]
 
-def compile_highlight(summary, skill_groups, skills, course_ids):
+def compile_highlight(summary, skills, course_ids):
 
     # Because there was little testing period for the initial skill extraction, some skills contain defects, like starting with "15. ", they are removed here, but this will be fixed in future staging registries. 
     def clean_skill(s):
         return re.sub(r"^\s*[\d]+[.)]\s*", "", str(s)).strip()
-
-    def pluralize(n, word):
-        return f"{n} {word if n == 1 else word + 's'}"
-
-    def pct(part, whole, i): # Percentage calculation
-        if whole <= 0:
-            return "0%"
-        return (
-            f"{(part / whole) * 100:.0f}% of your skill base from the courses"
-            if i == 1
-            else f"{(part / whole) * 100:.0f}%" # Show the description, only for the first skill group
-        )
-
-    # Sort skill groups
-    total_count = sum(skill_groups.values())
-    top_groups = sorted(skill_groups.items(), key=lambda kv: kv[1], reverse=True)[:5]
-
-    # Build significant skills
-    group_lines = []
-    for i, (group, count) in enumerate(top_groups, start=1):
-        line1 = f"{i}. {group}"
-        line2 = f"   -> {pluralize(count, 'skill')} ({pct(count, total_count, i)})"
-        group_lines.append(f"{line1}\n{line2}\n")
-
-    sig_skills_block = "Significant skill areas:\n" + "\n".join(group_lines).rstrip()
 
     # Build standout skills
     seen = set()
@@ -254,15 +213,15 @@ def compile_highlight(summary, skill_groups, skills, course_ids):
 
     # Final 'totals' sentence
     totals_sentence = ""
-    if course_ids or skills or skill_groups:
+    if course_ids or skills:
         totals_sentence = (
             f"\n\nOverall, we have analyzed {len(course_ids)} of your courses "
-            f"and found {len(skills)} skills! That's over a range of {len(skill_groups)} skill groups."
+            f"and found {len(skills)} skills!"
         )
         totals_sentence += standout_sentence
 
     # Build the highlight
-    highlight = f"{summary}\n\n{sig_skills_block}{totals_sentence}".strip()
+    highlight = f"{summary}\n\n{totals_sentence}".strip()
     return highlight
 
 from time import perf_counter
@@ -298,18 +257,16 @@ def lambda_handler(event, context):
     courses_skill_data = get_course_data(body["coursesList"], body["source"])
     print(f"Course skill data: {courses_skill_data}")
     student_skills = list(set([skill for course in courses_skill_data for skill in course["skills"]])) # list(set(, insures that that there are no repeated skills
-    student_skill_groups = sum_skill_groups([course["skill_groups"] for course in courses_skill_data])
-    summary = chatgpt_summary(student_skills, student_skill_groups, [(course["title"], course["description"]) for course in courses_skill_data], summary_gpt_model)
+    summary = chatgpt_summary(student_skills, [(course["title"], course["description"]) for course in courses_skill_data], summary_gpt_model)
     
     analyzed_course_ids = [course["id"] for course in courses_skill_data]
-    highlight = compile_highlight(summary, student_skill_groups, student_skills, analyzed_course_ids)
+    highlight = compile_highlight(summary, student_skills, analyzed_course_ids)
 
     response = {
         'status': 200,
         'body': {
             "summary": summary,
             "student_skill_list": student_skills,
-            "student_skill_groups": student_skill_groups,
             "course_id_list": analyzed_course_ids,
             "highlight": highlight
         }
