@@ -33,7 +33,6 @@ def get_course_data_from_db(course_title_code_list, school_name):
         QueryString=query,
         QueryExecutionContext={
             'Database': os.environ['ATHENA_DATABASE'],
-            'Catalog': os.environ['ATHENA_CATALOG']
         },
         ResultConfiguration={
             'OutputLocation': os.environ['ATHENA_OUTPUT_S3']
@@ -47,6 +46,7 @@ def get_course_data_from_db(course_title_code_list, school_name):
     while True:
         response = client.get_query_execution(QueryExecutionId=query_execution_id)
         state = response['QueryExecution']['Status']['State']
+        reason = response['QueryExecution']['Status'].get('StateChangeReason', 'N/A')
         
         if state in ['SUCCEEDED', 'FAILED', 'CANCELLED']:  # (optional) checking the status 
             break
@@ -59,9 +59,8 @@ def get_course_data_from_db(course_title_code_list, school_name):
         result_data = client.get_query_results(QueryExecutionId=query_execution_id)
         print(result_data)
     else:
-        print(f"Query failed in state: {state}")
-        print(response)
-        return []
+        raise Exception(f"Query exited in state {state}:\n{reason}")
+        
 
 def get_course_data(course_title_code_list, school_name):
     db_response = get_course_data_from_db(course_title_code_list, school_name)
