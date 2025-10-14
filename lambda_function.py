@@ -105,9 +105,9 @@ def init_client():
     api_key = json.loads(secret_string).get('OPENAI_API_KEY')
     return OpenAI(api_key=api_key)
 
-def chatgpt_send_messages_json(messages, json_schema_wrapper, model, client):
+def chatgpt_send_messages_json(messages, json_schema_wrapper, client):
     json_response = client.chat.completions.create(
-        model=model,
+        model=os.environ.get('OPENAI_GPT_MODEL', 'gpt-4.1-nano'),
         messages=messages,
         response_format={
             "type": "json_schema",
@@ -123,7 +123,8 @@ def chatgpt_send_messages_json(messages, json_schema_wrapper, model, client):
     return json.loads(json_response_content)
 
 
-def get_prompt_plus_schema(skills, course_descriptions): # Could be saved separately or in s3?
+def get_prompt_plus_schema(course_skills_data, all_student_skills): # Could be saved separately or in s3?
+    course_descriptions = [(course["title"], course["description"]) for course in course_skills_data]
     prompt = [
         {"role": "system", "content": '''
             You are summarizing a university-level student's abilities and skills.
@@ -145,7 +146,7 @@ def get_prompt_plus_schema(skills, course_descriptions): # Could be saved separa
         '''},
         {"role": "user", "content": f'''
             1) {course_descriptions}
-            2) {skills}
+            2) {all_student_skills}
         '''}
     ]
 
@@ -169,9 +170,9 @@ def get_prompt_plus_schema(skills, course_descriptions): # Could be saved separa
     return prompt, json_schema
 
 
-def chatgpt_summary(skills, course_descriptions, model):
-    prompt, json_schema = get_prompt_plus_schema(skills, course_descriptions)
-    summary = chatgpt_send_messages_json(prompt, json_schema, model, init_client())
+def chatgpt_summary(course_skills_data, all_student_skills):
+    prompt, json_schema = get_prompt_plus_schema(course_skills_data, all_student_skills)
+    summary = chatgpt_send_messages_json(prompt, json_schema, init_client())
     return summary["summary"]
 
 def compile_highlight(summary, skills, course_ids):
@@ -224,8 +225,6 @@ def _timeit(f):
 
 @_timeit
 def lambda_handler(event, context):
-    summary_gpt_model = "gpt-4.1-nano"
-
     if type(event["body"]) is str:
         body = json.loads(event["body"])
     else:
@@ -244,12 +243,13 @@ def lambda_handler(event, context):
         }
         
 
-    courses_skill_data = get_course_data(body["coursesList"], body["source"])
-    print(f"Course skill data: {courses_skill_data}")
-    student_skills = list(set([skill for course in courses_skill_data for skill in json.loads(course["skills"])]))
-    summary = chatgpt_summary(student_skills, [(course["title"], course["description"]) for course in courses_skill_data], summary_gpt_model)
+    course_skills_data = get_course_data(body["coursesList"], body["source"])
+    student_skills = list(set(
+        [skill for course in course_skills_data for skill in course["skills"].strip("[]").split(", ")]
+    ))
+    summary = chatgpt_summary(course_skills_data, student_skills)
     
-    analyzed_course_ids = [course["id"] for course in courses_skill_data]
+    analyzed_course_ids = [course["id"] for course in course_skills_data]
     highlight = compile_highlight(summary, student_skills, analyzed_course_ids)
 
     response = {
