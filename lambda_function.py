@@ -33,6 +33,7 @@ def get_course_data_from_db(course_title_code_list, school_name):
         QueryString=query,
         QueryExecutionContext={
             'Database': os.environ['ATHENA_DATABASE'],
+            'Catalog': os.environ['ATHENA_CATALOG']
         },
         ResultConfiguration={
             'OutputLocation': os.environ['ATHENA_OUTPUT_S3']
