@@ -136,9 +136,13 @@ def nova_send_messages_json(
     client = boto3.client("bedrock-runtime")
 
     # Build the conversation for the Converse API
+    system_prompt = []
     conversation = []
     for msg in messages:
         role = msg["role"]  # 'system'|'user'|'assistant'
+        if role == "system":
+            system_prompt.append({"text": msg["content"]})
+            continue
         content = [{"text": msg["content"]}]
         conversation.append({"role": role, "content": content})
 
@@ -151,6 +155,7 @@ def nova_send_messages_json(
     response = client.converse(
         modelId="amazon.nova-micro-v1:0",
         messages=conversation,
+        system=system_prompt,
         inferenceConfig={
             "maxTokens": 2000,
             "temperature": 0.0
