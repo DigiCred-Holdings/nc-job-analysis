@@ -17,9 +17,11 @@ def build_query(course_title_code_list, school_code):
     """
     return query
 
+
 # Helper function to extract VarCharValue from Athena query result
 def get_var_char_values(d):
     return [obj['VarCharValue'] for obj in d['Data']]
+
 
 def get_course_data_from_db(course_title_code_list, school_name):
     client = boto3.client('athena')   # create athena client
@@ -71,6 +73,7 @@ def get_course_data_from_db(course_title_code_list, school_name):
     unpacked_results = [dict(zip(header, get_var_char_values(row))) for row in rows]    
     return unpacked_results
 
+
 def get_course_data(course_title_code_list, school_name):
     db_courses = get_course_data_from_db(course_title_code_list, school_name)
     course_skill_data = []
@@ -96,33 +99,6 @@ def get_course_data(course_title_code_list, school_name):
     
     return course_skill_data
 
-### OPENAI API RELATED ###
-
-def init_client():
-    # Get OpenAI key from aws secrets manager and return OpenAI client
-    secrets_client = boto3.client('secretsmanager')
-    secret_response = secrets_client.get_secret_value(SecretId=os.environ['OPENAI_API_KEY_SECRET'])
-    secret_string = secret_response['SecretString']
-    api_key = json.loads(secret_string).get('OPENAI_API_KEY')
-    return OpenAI(api_key=api_key)
-
-def chatgpt_send_messages_json(messages, json_schema_wrapper, client):
-    json_response = client.chat.completions.create(
-        model=os.environ.get('OPENAI_GPT_MODEL', 'gpt-4.1-nano'),
-        messages=messages,
-        response_format={
-            "type": "json_schema",
-            "json_schema": {
-                "name": json_schema_wrapper["name"],
-                "strict": True,
-                "schema": json_schema_wrapper["schema"]
-            }
-        }
-    )
-    # Access the content directly from the response object
-    json_response_content = json_response.choices[0].message.content
-    return json.loads(json_response_content)
-
 
 def nova_send_messages_json(
     messages: list[dict[str, str]],
@@ -146,11 +122,6 @@ def nova_send_messages_json(
         content = [{"text": msg["content"]}]
         conversation.append({"role": role, "content": content})
 
-    # Ask the model to reply with valid JSON
-    conversation.append({
-        "role": "user",
-        "content": [{"text": "Reply only with valid JSON that matches the schema."}]
-    })
 
     response = client.converse(
         modelId="amazon.nova-micro-v1:0",
@@ -164,11 +135,8 @@ def nova_send_messages_json(
 
     # Extract the text reply
     assistant_msg = response["output"]["message"]["content"][0]["text"]
+    return assistant_msg
 
-    # Validate against the schema (optional but recommended)
-    parsed = json.loads(assistant_msg)
-    # TODO: validate `parsed` against json_schema_wrapper["schema"] with jsonschema/pydantic
-    return parsed
 
 def get_prompt_plus_schema(course_skills_data): # Could be saved separately or in s3?
     course_descriptions = [(course["title"], course["description"]) for course in course_skills_data]
@@ -218,7 +186,8 @@ def get_prompt_plus_schema(course_skills_data): # Could be saved separately or i
 def chatgpt_summary(course_skills_data):
     prompt, json_schema = get_prompt_plus_schema(course_skills_data)
     summary = nova_send_messages_json(prompt, json_schema)
-    return summary["summary"]
+    return summary
+
 
 def compile_highlight(summary, course_skills_data):
 
@@ -258,6 +227,7 @@ def compile_highlight(summary, course_skills_data):
     highlight = f"{summary}\n\n{totals_sentence}".strip()
     return highlight
 
+
 from time import perf_counter
 def _timeit(f):
     def wrap(*a, **kw):
@@ -265,6 +235,7 @@ def _timeit(f):
         print(f"{f.__name__} took {(perf_counter()-t)*1000:.3f} ms")
         return r
     return wrap
+
 
 @_timeit
 def lambda_handler(event, context):
