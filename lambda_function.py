@@ -158,7 +158,7 @@ def get_prompt(course_skills_data):
 
 def chatgpt_summary(course_skills_data):
     prompt = get_prompt(course_skills_data)
-    summary = invoke_bedrock_model(prompt, json_schema)
+    summary = invoke_bedrock_model(prompt)
     return summary
 
 
