@@ -123,6 +123,47 @@ def chatgpt_send_messages_json(messages, json_schema_wrapper, client):
     return json.loads(json_response_content)
 
 
+def nova_send_messages_json(
+    messages: list[dict[str, str]],
+    json_schema_wrapper: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Send a conversation to Nova Micro and expect a JSON reply.
+    No native schema enforcement; we prompt for JSON and validate afterwards.
+    """
+
+    client = boto3.client("bedrock-runtime")
+
+    # Build the conversation for the Converse API
+    conversation = []
+    for msg in messages:
+        role = msg["role"]  # 'system'|'user'|'assistant'
+        content = [{"text": msg["content"]}]
+        conversation.append({"role": role, "content": content})
+
+    # Ask the model to reply with valid JSON
+    conversation.append({
+        "role": "user",
+        "content": [{"text": "Reply only with valid JSON that matches the schema."}]
+    })
+
+    response = client.converse(
+        modelId="amazon.nova-micro-v1:0",
+        messages=conversation,
+        inferenceConfig={
+            "maxTokens": 2000,
+            "temperature": 0.0
+        }
+    )
+
+    # Extract the text reply
+    assistant_msg = response["output"]["message"]["content"][0]["text"]
+
+    # Validate against the schema (optional but recommended)
+    parsed = json.loads(assistant_msg)
+    # TODO: validate `parsed` against json_schema_wrapper["schema"] with jsonschema/pydantic
+    return parsed
+
 def get_prompt_plus_schema(course_skills_data): # Could be saved separately or in s3?
     course_descriptions = [(course["title"], course["description"]) for course in course_skills_data]
     skills_by_course = [(course["title"], course["skills"]) for course in course_skills_data]
@@ -170,7 +211,7 @@ def get_prompt_plus_schema(course_skills_data): # Could be saved separately or i
 
 def chatgpt_summary(course_skills_data):
     prompt, json_schema = get_prompt_plus_schema(course_skills_data)
-    summary = chatgpt_send_messages_json(prompt, json_schema, init_client())
+    summary = nova_send_messages_json(prompt, json_schema)
     return summary["summary"]
 
 def compile_highlight(summary, course_skills_data):
