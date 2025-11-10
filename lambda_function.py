@@ -100,10 +100,7 @@ def get_course_data(course_title_code_list, school_name):
     return course_skill_data
 
 
-def nova_send_messages_json(
-    messages: list[dict[str, str]],
-    json_schema_wrapper: dict[str, Any],
-) -> dict[str, Any]:
+def invoke_bedrock_model(messages: list[dict[str, str]]):
     client = boto3.client("bedrock-runtime")
 
     # Build the conversation for the Converse API
@@ -131,7 +128,7 @@ def nova_send_messages_json(
     return assistant_msg
 
 
-def get_prompt_plus_schema(course_skills_data): # Could be saved separately or in s3?
+def get_prompt(course_skills_data):
     course_descriptions = [(course["title"], course["description"]) for course in course_skills_data]
     skills_by_course = [(course["title"], course["skills"]) for course in course_skills_data]
     prompt = [
@@ -156,29 +153,12 @@ def get_prompt_plus_schema(course_skills_data): # Could be saved separately or i
         '''}
     ]
 
-    json_schema = {
-        "name": "student_summary",
-        "schema": {
-            "type": "object",
-            "properties": {
-                "summary": {
-                    "type": "string",
-                    "description": "A short positive narrative summary of the student's strengths.",
-                    "maxLength": 1200,
-                    "pattern": r"^([^.!?]*[.!?]){1,3}$"
-                }
-            },
-            "required": ["summary"],
-            "additionalProperties": False
-        }
-    }
-
-    return prompt, json_schema
+    return prompt
 
 
 def chatgpt_summary(course_skills_data):
-    prompt, json_schema = get_prompt_plus_schema(course_skills_data)
-    summary = nova_send_messages_json(prompt, json_schema)
+    prompt = get_prompt(course_skills_data)
+    summary = invoke_bedrock_model(prompt, json_schema)
     return summary
 
 
