@@ -4,6 +4,7 @@ import boto3
 from openai import OpenAI
 import os
 import re
+from typing import Any
 
 
 def build_query(course_title_code_list, school_code):
@@ -16,9 +17,11 @@ def build_query(course_title_code_list, school_code):
     """
     return query
 
+
 # Helper function to extract VarCharValue from Athena query result
 def get_var_char_values(d):
     return [obj['VarCharValue'] for obj in d['Data']]
+
 
 def get_course_data_from_db(course_title_code_list, school_name):
     client = boto3.client('athena')   # create athena client
@@ -70,6 +73,7 @@ def get_course_data_from_db(course_title_code_list, school_name):
     unpacked_results = [dict(zip(header, get_var_char_values(row))) for row in rows]    
     return unpacked_results
 
+
 def get_course_data(course_title_code_list, school_name):
     db_courses = get_course_data_from_db(course_title_code_list, school_name)
     course_skill_data = []
@@ -95,35 +99,36 @@ def get_course_data(course_title_code_list, school_name):
     
     return course_skill_data
 
-### OPENAI API RELATED ###
 
-def init_client():
-    # Get OpenAI key from aws secrets manager and return OpenAI client
-    secrets_client = boto3.client('secretsmanager')
-    secret_response = secrets_client.get_secret_value(SecretId=os.environ['OPENAI_API_KEY_SECRET'])
-    secret_string = secret_response['SecretString']
-    api_key = json.loads(secret_string).get('OPENAI_API_KEY')
-    return OpenAI(api_key=api_key)
+def invoke_bedrock_model(messages: list[dict[str, str]]):
+    client = boto3.client("bedrock-runtime")
 
-def chatgpt_send_messages_json(messages, json_schema_wrapper, client):
-    json_response = client.chat.completions.create(
-        model=os.environ.get('OPENAI_GPT_MODEL', 'gpt-4.1-nano'),
-        messages=messages,
-        response_format={
-            "type": "json_schema",
-            "json_schema": {
-                "name": json_schema_wrapper["name"],
-                "strict": True,
-                "schema": json_schema_wrapper["schema"]
-            }
+    # Build the conversation for the Converse API
+    system_prompt = []
+    conversation = []
+    for msg in messages:
+        role = msg["role"]  # 'system'|'user'|'assistant'
+        if role == "system":
+            system_prompt.append({"text": msg["content"]})
+            continue
+        content = [{"text": msg["content"]}]
+        conversation.append({"role": role, "content": content})
+
+    response = client.converse(
+        modelId="amazon.nova-micro-v1:0",
+        messages=conversation,
+        system=system_prompt,
+        inferenceConfig={
+            "maxTokens": 2000,
+            "temperature": 0.0
         }
     )
-    # Access the content directly from the response object
-    json_response_content = json_response.choices[0].message.content
-    return json.loads(json_response_content)
+
+    assistant_msg = response["output"]["message"]["content"][0]["text"]
+    return assistant_msg
 
 
-def get_prompt_plus_schema(course_skills_data): # Could be saved separately or in s3?
+def get_prompt(course_skills_data):
     course_descriptions = [(course["title"], course["description"]) for course in course_skills_data]
     skills_by_course = [(course["title"], course["skills"]) for course in course_skills_data]
     prompt = [
@@ -148,30 +153,14 @@ def get_prompt_plus_schema(course_skills_data): # Could be saved separately or i
         '''}
     ]
 
-    json_schema = {
-        "name": "student_summary",
-        "schema": {
-            "type": "object",
-            "properties": {
-                "summary": {
-                    "type": "string",
-                    "description": "A short positive narrative summary of the student's strengths.",
-                    "maxLength": 1200,
-                    "pattern": r"^([^.!?]*[.!?]){1,3}$"
-                }
-            },
-            "required": ["summary"],
-            "additionalProperties": False
-        }
-    }
-
-    return prompt, json_schema
+    return prompt
 
 
 def chatgpt_summary(course_skills_data):
-    prompt, json_schema = get_prompt_plus_schema(course_skills_data)
-    summary = chatgpt_send_messages_json(prompt, json_schema, init_client())
-    return summary["summary"]
+    prompt = get_prompt(course_skills_data)
+    summary = invoke_bedrock_model(prompt)
+    return summary
+
 
 def compile_highlight(summary, course_skills_data):
 
@@ -211,6 +200,7 @@ def compile_highlight(summary, course_skills_data):
     highlight = f"{summary}\n\n{totals_sentence}".strip()
     return highlight
 
+
 from time import perf_counter
 def _timeit(f):
     def wrap(*a, **kw):
@@ -218,6 +208,7 @@ def _timeit(f):
         print(f"{f.__name__} took {(perf_counter()-t)*1000:.3f} ms")
         return r
     return wrap
+
 
 @_timeit
 def lambda_handler(event, context):
