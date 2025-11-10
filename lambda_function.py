@@ -4,6 +4,7 @@ import boto3
 from openai import OpenAI
 import os
 import re
+from typing import Any
 
 
 def build_query(course_title_code_list, school_code):
@@ -125,8 +126,8 @@ def chatgpt_send_messages_json(messages, json_schema_wrapper, client):
 
 def nova_send_messages_json(
     messages: list[dict[str, str]],
-    json_schema_wrapper: dict[str, any],
-) -> dict[str, any]:
+    json_schema_wrapper: dict[str, Any],
+) -> dict[str, Any]:
     """
     Send a conversation to Nova Micro and expect a JSON reply.
     No native schema enforcement; we prompt for JSON and validate afterwards.
