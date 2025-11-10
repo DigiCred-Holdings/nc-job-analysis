@@ -104,11 +104,6 @@ def nova_send_messages_json(
     messages: list[dict[str, str]],
     json_schema_wrapper: dict[str, Any],
 ) -> dict[str, Any]:
-    """
-    Send a conversation to Nova Micro and expect a JSON reply.
-    No native schema enforcement; we prompt for JSON and validate afterwards.
-    """
-
     client = boto3.client("bedrock-runtime")
 
     # Build the conversation for the Converse API
@@ -122,7 +117,6 @@ def nova_send_messages_json(
         content = [{"text": msg["content"]}]
         conversation.append({"role": role, "content": content})
 
-
     response = client.converse(
         modelId="amazon.nova-micro-v1:0",
         messages=conversation,
@@ -133,7 +127,6 @@ def nova_send_messages_json(
         }
     )
 
-    # Extract the text reply
     assistant_msg = response["output"]["message"]["content"][0]["text"]
     return assistant_msg
 
