@@ -1,100 +1,58 @@
 import json
 import time
 import boto3
-from openai import OpenAI
 import os
 import re
 
+s3_client = boto3.client('s3')
+REGISTRY_URI = os.environ['REGISTRY_S3_URI']
 
-def build_query(course_title_code_list):
-    # Build the SQL query to fetch course data based on course titles and codes
-    query = f"""
-    SELECT c.name, c.code, s.id, s.name, t.skill_level
-    FROM courses c
-    CROSS JOIN UNNEST(skill_ids, skill_levels) WITH ORDINALITY AS t(skill_id, skill_level, pos)
-    JOIN skills s ON s.id = t.skill_id
-    WHERE {' OR '.join([f"c.code LIKE CONCAT('%', ?, '%')"]*len(course_title_code_list))}
-    """
-    return query
+def load_skills_dataset():
+    # Get bucket key from environment variable S3 URI e.g. s3://digicred-credential-analysis/dev/staging_registry.json
+    bucket, key = REGISTRY_URI.replace("s3://", "").split("/", 1)
+    response = s3_client.get_object(Bucket=bucket, Key=key)
+    if response['ResponseMetadata']['HTTPStatusCode'] != 200:
+        raise Exception(f"Failed to retrieve data from S3: {response['ResponseMetadata']['HTTPStatusCode']}")
+    content = response['Body'].read().decode('utf-8')
+    return json.loads(content)
 
-# Helper function to extract VarCharValue from Athena query result
-def get_var_char_values(d):
-    return [obj['VarCharValue'] for obj in d['Data']]
-
-
-def get_course_data_from_db(course_title_code_list):
-    client = boto3.client('athena')   # create athena client
-    
-    query = build_query(course_title_code_list)
-    
-    print("Executing query on school code:")
-    # Start the Athena query execution
-    start_query_response = client.start_query_execution(
-        QueryString=query,
-        QueryExecutionContext={
-            'Database': os.environ['ATHENA_DATABASE']
-        },
-        ResultConfiguration={
-            'OutputLocation': os.environ['ATHENA_OUTPUT_S3']
-        },
-        ExecutionParameters=[code for _, code in course_title_code_list]
-    )
-    print("Query execution started:", start_query_response)
-
-    query_execution_id = start_query_response['QueryExecutionId']
-    
-    # Poll the query status until it completes
-    while True:
-        status_response = client.get_query_execution(QueryExecutionId=query_execution_id)
-        state = status_response['QueryExecution']['Status']['State']
-        reason = status_response['QueryExecution']
+def find_relevant_courses(student_course_codes, all_courses):
+    all_course_codes = [course["code"].upper() for course in all_courses]
+    for given_code in student_course_codes:
+        candidates = []
+        for code_to_evaluate in all_course_codes:
+            if given_code in code_to_evaluate:
+                candidates += [course for course in all_courses if course["code"] == code_to_evaluate]
         
-        if state == 'SUCCEEDED':
-            break
-        elif state in ['FAILED', 'CANCELLED']:
-            raise Exception(f"Query {state}: {reason}")
-        
-        time.sleep(0.2)  # Poll every 0.2 seconds
-        
-    results_response = client.get_query_results(QueryExecutionId=query_execution_id)
-    
-    if not results_response or 'ResultSet' not in results_response or 'Rows' not in results_response['ResultSet']:
-        return []
- 
-    # Unpack the results into a list of dictionaries, using the header row as keys
-    header, *rows = results_response['ResultSet']['Rows']
-    header = get_var_char_values(header)
-    header[header.index('name')] = 'course_name'
-    header[header.index('name')] = 'skill_name'
-    unpacked_results = [dict(zip(header, get_var_char_values(row))) for row in rows]    
-    return unpacked_results
+        print(f'Found {len(candidates)} candidates for {given_code}: ', candidates)
 
 
 def get_course_data(course_title_code_list):
-    db_courses = get_course_data_from_db(course_title_code_list)
-    print(db_courses)
-    course_skill_data = []
+    all_courses = load_skills_dataset()
+    student_course_codes = [course["code"].upper() for course in course_title_code_list]
+    student_courses = find_relevant_courses(student_course_codes, all_courses)
+    return None
+    # for _, input_source_code in course_title_code_list:
+    #     code_matches = [course for course in all_courses if input_source_code in course['code']]
+        
+    #     if code_matches:
+    #         course = code_matches[0]  # Take the first match if multiple
+    #         course_skill_data.append({
+    #             "id": course['id'],
+    #             "title": course['data_title'],
+    #             "code": course['data_code'],
+    #             "description": course['data_desc'],
+    #             "skills": course['dse_skills'].strip("[]").split(", ") if course['dse_skills'] else []
+    #         })
     
-    for _, course_code in course_title_code_list:
-        code_matches = [course for course in db_courses if course['code'] in course_code]
-        if code_matches:
-            course = code_matches[0]  # Take the first match if multiple
-            course_skill_data.append({
-                "id": course['id'],
-                "title": course['data_title'],
-                "code": course['data_code'],
-                "description": course['data_desc'],
-                "skills": course['dse_skills'].strip("[]").split(", ") if course['dse_skills'] else []
-            })
+    # print(f"Fetched {len(course_skill_data)} courses with skills from DB.")
     
-    print(f"Fetched {len(course_skill_data)} courses with skills from DB.")
+    # if len(course_skill_data) < len(course_title_code_list):
+    #     missing_count = len(course_title_code_list) - len(course_skill_data)
+    #     missing_codes = set(code for _, code in course_title_code_list) - set(course['code'] for course in course_skill_data)
+    #     print(f"Warning: {missing_count} courses were not found in the database. Missing codes: {missing_codes}")
     
-    if len(course_skill_data) < len(course_title_code_list):
-        missing_count = len(course_title_code_list) - len(course_skill_data)
-        missing_codes = set(code for _, code in course_title_code_list) - set(course['code'] for course in course_skill_data)
-        print(f"Warning: {missing_count} courses were not found in the database. Missing codes: {missing_codes}")
-    
-    return course_skill_data
+    # return course_skill_data
 
 
 def invoke_bedrock_model(messages: list[dict[str, str]]):
@@ -230,7 +188,7 @@ def lambda_handler(event, context):
     course_skills_data = get_course_data(body["coursesList"])
     summary = chatgpt_summary(course_skills_data)
     
-    highlight = compile_highlight(summary, course_skills_data)
+    # highlight = compile_highlight(summary, course_skills_data)
     
     analyzed_course_ids = [course["id"] for course in course_skills_data]
     response = {
@@ -238,7 +196,6 @@ def lambda_handler(event, context):
         'body': {
             "summary": summary,
             "course_ids": analyzed_course_ids,
-            "highlight": highlight
         }
     }
     return response
