@@ -18,17 +18,25 @@ def load_skills_dataset():
         result = json.loads(content)
     except Exception as e:
         raise Exception(f'Failed to parse data from s3:', e)
-    
     return result
 
 def find_relevant_courses(student_course_codes, all_courses):
     all_course_codes = [course["code"].upper() for course in all_courses if course["code"]]
+    found_student_courses = []
     for given_code in student_course_codes:
         candidates = []
         for code_to_evaluate in all_course_codes:
             if given_code in code_to_evaluate:
                 candidates += [course for course in all_courses if course.get("code") == code_to_evaluate]
         
+        if len(candidates) == 1:
+            found_student_courses.append(candidates[0])
+        elif len(candidates):
+            print("Multiple candidates for course were found in the registry for code", given_code)
+            print(",\n".join([course["code"] + " " + course["name"] for course in candidates]))
+        else:
+            print(f"Course code was not found in the registry: {}")
+            
         print(f'Found {len(candidates)} candidates for {given_code}: ', candidates)
 
 
