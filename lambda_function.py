@@ -218,14 +218,14 @@ def lambda_handler(event, context):
         }
     
     ()
-    if "coursesList" not in body or "source" not in body:
+    if "coursesList" not in body:
         return {
             'statusCode': 400,
             'body': 'Invalid input: coursesList and source are required.'
         }
         
 
-    course_skills_data = get_course_data(body["coursesList"], body["source"])
+    course_skills_data = get_course_data(body["coursesList"])
     summary = chatgpt_summary(course_skills_data)
     
     highlight = compile_highlight(summary, course_skills_data)
