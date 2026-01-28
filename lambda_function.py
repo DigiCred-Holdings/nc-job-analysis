@@ -13,7 +13,7 @@ def build_query(course_title_code_list):
     FROM courses c
     CROSS JOIN UNNEST(skill_ids, skill_levels) WITH ORDINALITY AS t(skill_id, skill_level, pos)
     JOIN skills s ON s.id = t.skill_id
-    WHERE {' OR '.join([f"c.code LIKE '%?%'"]*len(course_title_code_list))})
+    WHERE {' OR '.join([f"c.code LIKE '%?%'"]*len(course_title_code_list))}
     """
     return query
 
