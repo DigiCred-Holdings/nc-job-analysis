@@ -4,36 +4,30 @@ import boto3
 from openai import OpenAI
 import os
 import re
-from typing import Any
 
 
-def build_query(course_title_code_list, school_code):
+def build_query(course_title_code_list):
     # Build the SQL query to fetch course data based on course titles and codes
     query = f"""
-    SELECT id, data_title, data_code, data_desc, dse_skills
-    FROM courses
-    WHERE data_src = '{school_code}'
-        AND data_code IN ({', '.join(['?']*len(course_title_code_list))})
+    SELECT c.name, c.code, s.id, s.name, t.skill_level
+    FROM courses c
+    CROSS JOIN UNNEST(skill_ids, skill_levels) WITH ORDINALITY AS t(skill_id, skill_level, pos)
+    JOIN skills s ON s.id = t.skill_id
+    WHERE {' OR '.join([f'c.code IN %?%']*len(course_title_code_list))})
     """
     return query
-
 
 # Helper function to extract VarCharValue from Athena query result
 def get_var_char_values(d):
     return [obj['VarCharValue'] for obj in d['Data']]
 
 
-def get_course_data_from_db(course_title_code_list, school_name):
+def get_course_data_from_db(course_title_code_list):
     client = boto3.client('athena')   # create athena client
     
-    school_name_code_lookup = {
-        "university of wyoming": "UWYO",
-    }
-    school_code = school_name_code_lookup.get(school_name.lower())
+    query = build_query(course_title_code_list)
     
-    query = build_query(course_title_code_list, school_code)
-    
-    print("Executing query on school code:", school_code)
+    print("Executing query on school code:")
     # Start the Athena query execution
     start_query_response = client.start_query_execution(
         QueryString=query,
@@ -74,12 +68,13 @@ def get_course_data_from_db(course_title_code_list, school_name):
     return unpacked_results
 
 
-def get_course_data(course_title_code_list, school_name):
-    db_courses = get_course_data_from_db(course_title_code_list, school_name)
+def get_course_data(course_title_code_list):
+    db_courses = get_course_data_from_db(course_title_code_list)
+    print(db_courses)
     course_skill_data = []
     
     for _, course_code in course_title_code_list:
-        code_matches = [course for course in db_courses if course['data_code'] == course_code]
+        code_matches = [course for course in db_courses if course['code'] in course_code]
         if code_matches:
             course = code_matches[0]  # Take the first match if multiple
             course_skill_data.append({
