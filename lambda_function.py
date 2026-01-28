@@ -16,9 +16,10 @@ def load_skills_dataset():
     try:
         content = response['Body'].read().decode('utf-8')
         result = json.loads(content)
-        print(len(result))
     except Exception as e:
         raise Exception(f'Failed to parse data from s3:', e)
+    
+    return result
 
 def find_relevant_courses(student_course_codes, all_courses):
     all_course_codes = [course["code"].upper() for course in all_courses if course["code"]]
