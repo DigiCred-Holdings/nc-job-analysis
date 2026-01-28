@@ -35,9 +35,9 @@ def find_relevant_courses(student_course_codes, all_courses):
             print("Multiple candidates for course were found in the registry for code", given_code)
             print(",\n".join([course["code"] + " " + course["name"] for course in candidates]))
         else:
-            print(f"Course code was not found in the registry: {}")
-            
-        print(f'Found {len(candidates)} candidates for {given_code}: ', candidates)
+            print(f"Course code was not found in the registry", given_code)
+    
+    return found_student_courses
 
 
 def get_course_data(course_title_code_list):
