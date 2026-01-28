@@ -29,7 +29,7 @@ def find_relevant_courses(student_course_codes, all_courses):
 
 def get_course_data(course_title_code_list):
     all_courses = load_skills_dataset()
-    student_course_codes = [course["code"].upper() for course in course_title_code_list]
+    student_course_codes = [course[1].upper() for course in course_title_code_list]
     student_courses = find_relevant_courses(student_course_codes, all_courses)
     return None
     # for _, input_source_code in course_title_code_list:
