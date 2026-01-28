@@ -21,12 +21,12 @@ def load_skills_dataset():
         raise Exception(f'Failed to parse data from s3:', e)
 
 def find_relevant_courses(student_course_codes, all_courses):
-    all_course_codes = [course["code"].upper() for course in all_courses]
+    all_course_codes = [course["code"].upper() for course in all_courses if course["code"]]
     for given_code in student_course_codes:
         candidates = []
         for code_to_evaluate in all_course_codes:
             if given_code in code_to_evaluate:
-                candidates += [course for course in all_courses if course["code"] == code_to_evaluate]
+                candidates += [course for course in all_courses if course.get("code") == code_to_evaluate]
         
         print(f'Found {len(candidates)} candidates for {given_code}: ', candidates)
 
