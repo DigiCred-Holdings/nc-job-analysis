@@ -64,6 +64,8 @@ def get_course_data_from_db(course_title_code_list):
     # Unpack the results into a list of dictionaries, using the header row as keys
     header, *rows = results_response['ResultSet']['Rows']
     header = get_var_char_values(header)
+    header[header.index('name')] = 'course_name'
+    header[header.index('name')] = 'skill_name'
     unpacked_results = [dict(zip(header, get_var_char_values(row))) for row in rows]    
     return unpacked_results
 
