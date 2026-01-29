@@ -1,102 +1,53 @@
 import json
 import time
 import boto3
-from openai import OpenAI
 import os
 import re
-from typing import Any
+
+s3_client = boto3.client('s3')
+REGISTRY_URI = os.environ['REGISTRY_S3_URI']
+
+def load_skills_dataset():
+    # Get bucket key from environment variable S3 URI e.g. s3://digicred-credential-analysis/dev/staging_registry.json
+    bucket, key = REGISTRY_URI.replace("s3://", "").split("/", 1)
+    response = s3_client.get_object(Bucket=bucket, Key=key)
+    if response['ResponseMetadata']['HTTPStatusCode'] != 200:
+        raise Exception(f"Failed to retrieve data from S3: {response['ResponseMetadata']['HTTPStatusCode']}")
+    try:
+        content = response['Body'].read().decode('utf-8')
+        result = json.loads(content)
+    except Exception as e:
+        raise Exception(f'Failed to parse data from s3:', e)
+    return result
+
+def find_relevant_courses(course_title_code_list, all_courses):
+    all_course_codes = [course["code"].upper() for course in all_courses if course["code"]]
+    found_student_courses = []
+    missing_codes = []
+    for given_title, given_code in course_title_code_list:
+        candidates = []
+        for code_to_evaluate in all_course_codes:
+            if given_code in code_to_evaluate:
+                candidates += [course for course in all_courses if course.get("code") == code_to_evaluate]
+
+        if len(candidates) == 1:
+            found_student_courses.append(candidates[0])
+        elif len(candidates):
+            print("Multiple candidates for course were found in the registry for code", given_code, given_title)
+            print(", ".join([course["code"] + ": " + course["name"] for course in candidates]))
+            missing_codes.append([given_title, given_code])
+        else:
+            print(f"Course code was not found in the registry", given_code)
+            missing_codes.append([given_title, given_code])
+
+    print(f"Warning: {len(missing_codes)} courses were not found in the database.")
+    print(f"Could not find the following courses in registry: {missing_codes}")
+    return found_student_courses
 
 
-def build_query(course_title_code_list, school_code):
-    # Build the SQL query to fetch course data based on course titles and codes
-    query = f"""
-    SELECT id, data_title, data_code, data_desc, dse_skills
-    FROM courses
-    WHERE data_src = '{school_code}'
-        AND data_code IN ({', '.join(['?']*len(course_title_code_list))})
-    """
-    return query
-
-
-# Helper function to extract VarCharValue from Athena query result
-def get_var_char_values(d):
-    return [obj['VarCharValue'] for obj in d['Data']]
-
-
-def get_course_data_from_db(course_title_code_list, school_name):
-    client = boto3.client('athena')   # create athena client
-    
-    school_name_code_lookup = {
-        "university of wyoming": "UWYO",
-    }
-    school_code = school_name_code_lookup.get(school_name.lower())
-    
-    query = build_query(course_title_code_list, school_code)
-    
-    print("Executing query on school code:", school_code)
-    # Start the Athena query execution
-    start_query_response = client.start_query_execution(
-        QueryString=query,
-        QueryExecutionContext={
-            'Database': os.environ['ATHENA_DATABASE']
-        },
-        ResultConfiguration={
-            'OutputLocation': os.environ['ATHENA_OUTPUT_S3']
-        },
-        ExecutionParameters=[code for _, code in course_title_code_list]
-    )
-    print("Query execution started:", start_query_response)
-
-    query_execution_id = start_query_response['QueryExecutionId']
-    
-    # Poll the query status until it completes
-    while True:
-        status_response = client.get_query_execution(QueryExecutionId=query_execution_id)
-        state = status_response['QueryExecution']['Status']['State']
-        reason = status_response['QueryExecution']
-        
-        if state == 'SUCCEEDED':
-            break
-        elif state in ['FAILED', 'CANCELLED']:
-            raise Exception(f"Query {state}: {reason}")
-        
-        time.sleep(0.2)  # Poll every 0.2 seconds
-        
-    results_response = client.get_query_results(QueryExecutionId=query_execution_id)
-    
-    if not results_response or 'ResultSet' not in results_response or 'Rows' not in results_response['ResultSet']:
-        return []
- 
-    # Unpack the results into a list of dictionaries, using the header row as keys
-    header, *rows = results_response['ResultSet']['Rows']
-    header = get_var_char_values(header)
-    unpacked_results = [dict(zip(header, get_var_char_values(row))) for row in rows]    
-    return unpacked_results
-
-
-def get_course_data(course_title_code_list, school_name):
-    db_courses = get_course_data_from_db(course_title_code_list, school_name)
-    course_skill_data = []
-    
-    for _, course_code in course_title_code_list:
-        code_matches = [course for course in db_courses if course['data_code'] == course_code]
-        if code_matches:
-            course = code_matches[0]  # Take the first match if multiple
-            course_skill_data.append({
-                "id": course['id'],
-                "title": course['data_title'],
-                "code": course['data_code'],
-                "description": course['data_desc'],
-                "skills": course['dse_skills'].strip("[]").split(", ") if course['dse_skills'] else []
-            })
-    
-    print(f"Fetched {len(course_skill_data)} courses with skills from DB.")
-    
-    if len(course_skill_data) < len(course_title_code_list):
-        missing_count = len(course_title_code_list) - len(course_skill_data)
-        missing_codes = set(code for _, code in course_title_code_list) - set(course['code'] for course in course_skill_data)
-        print(f"Warning: {missing_count} courses were not found in the database. Missing codes: {missing_codes}")
-    
+def get_course_data(course_title_code_list):
+    all_courses = load_skills_dataset()
+    course_skill_data = find_relevant_courses(course_title_code_list, all_courses)    
     return course_skill_data
 
 
@@ -223,17 +174,17 @@ def lambda_handler(event, context):
         }
     
     ()
-    if "coursesList" not in body or "source" not in body:
+    if "coursesList" not in body:
         return {
             'statusCode': 400,
             'body': 'Invalid input: coursesList and source are required.'
         }
         
 
-    course_skills_data = get_course_data(body["coursesList"], body["source"])
+    course_skills_data = get_course_data(body["coursesList"])
     summary = chatgpt_summary(course_skills_data)
     
-    highlight = compile_highlight(summary, course_skills_data)
+    # highlight = compile_highlight(summary, course_skills_data)
     
     analyzed_course_ids = [course["id"] for course in course_skills_data]
     response = {
@@ -241,7 +192,6 @@ def lambda_handler(event, context):
         'body': {
             "summary": summary,
             "course_ids": analyzed_course_ids,
-            "highlight": highlight
         }
     }
     return response
