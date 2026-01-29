@@ -20,10 +20,10 @@ def load_skills_dataset():
         raise Exception(f'Failed to parse data from s3:', e)
     return result
 
-def find_relevant_courses(student_course_codes, all_courses):
+def find_relevant_courses(course_title_code_list, all_courses):
     all_course_codes = [course["code"].upper() for course in all_courses if course["code"]]
     found_student_courses = []
-    for given_code in student_course_codes:
+    for given_title, given_code in course_title_code_list:
         candidates = []
         for code_to_evaluate in all_course_codes:
             if given_code in code_to_evaluate:
@@ -32,7 +32,7 @@ def find_relevant_courses(student_course_codes, all_courses):
         if len(candidates) == 1:
             found_student_courses.append(candidates[0])
         elif len(candidates):
-            print("Multiple candidates for course were found in the registry for code", given_code)
+            print("Multiple candidates for course were found in the registry for code", given_code, given_title)
             print(",\n".join([course["code"] + " " + course["name"] for course in candidates]))
         else:
             print(f"Course code was not found in the registry", given_code)
@@ -42,30 +42,14 @@ def find_relevant_courses(student_course_codes, all_courses):
 
 def get_course_data(course_title_code_list):
     all_courses = load_skills_dataset()
-    student_course_codes = [course[1].upper() for course in course_title_code_list]
-    student_courses = find_relevant_courses(student_course_codes, all_courses)
-    return None
-    # for _, input_source_code in course_title_code_list:
-    #     code_matches = [course for course in all_courses if input_source_code in course['code']]
-        
-    #     if code_matches:
-    #         course = code_matches[0]  # Take the first match if multiple
-    #         course_skill_data.append({
-    #             "id": course['id'],
-    #             "title": course['data_title'],
-    #             "code": course['data_code'],
-    #             "description": course['data_desc'],
-    #             "skills": course['dse_skills'].strip("[]").split(", ") if course['dse_skills'] else []
-    #         })
+    course_skill_data = find_relevant_courses(course_title_code_list, all_courses)
     
-    # print(f"Fetched {len(course_skill_data)} courses with skills from DB.")
+    if len(course_skill_data) < len(course_title_code_list):
+        missing_count = len(course_title_code_list) - len(course_skill_data)
+        missing_codes = set(code for _, code in course_title_code_list) - set(course['code'] for course in course_skill_data)
+        print(f"Warning: {missing_count} courses were not found in the database. Missing codes: {missing_codes}")
     
-    # if len(course_skill_data) < len(course_title_code_list):
-    #     missing_count = len(course_title_code_list) - len(course_skill_data)
-    #     missing_codes = set(code for _, code in course_title_code_list) - set(course['code'] for course in course_skill_data)
-    #     print(f"Warning: {missing_count} courses were not found in the database. Missing codes: {missing_codes}")
-    
-    # return course_skill_data
+    return course_skill_data
 
 
 def invoke_bedrock_model(messages: list[dict[str, str]]):
