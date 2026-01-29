@@ -23,32 +23,31 @@ def load_skills_dataset():
 def find_relevant_courses(course_title_code_list, all_courses):
     all_course_codes = [course["code"].upper() for course in all_courses if course["code"]]
     found_student_courses = []
+    missing_codes = []
     for given_title, given_code in course_title_code_list:
         candidates = []
         for code_to_evaluate in all_course_codes:
             if given_code in code_to_evaluate:
                 candidates += [course for course in all_courses if course.get("code") == code_to_evaluate]
-        
+
         if len(candidates) == 1:
             found_student_courses.append(candidates[0])
         elif len(candidates):
             print("Multiple candidates for course were found in the registry for code", given_code, given_title)
-            print(",\n".join([course["code"] + " " + course["name"] for course in candidates]))
+            print(", ".join([course["code"] + ": " + course["name"] for course in candidates]))
+            missing_codes.append([given_title, given_code])
         else:
             print(f"Course code was not found in the registry", given_code)
-    
+            missing_codes.append([given_title, given_code])
+
+    print(f"Warning: {len(missing_codes)} courses were not found in the database.")
+    print(f"Could not find the following courses in registry: {missing_codes}")
     return found_student_courses
 
 
 def get_course_data(course_title_code_list):
     all_courses = load_skills_dataset()
-    course_skill_data = find_relevant_courses(course_title_code_list, all_courses)
-    
-    if len(course_skill_data) < len(course_title_code_list):
-        missing_count = len(course_title_code_list) - len(course_skill_data)
-        missing_codes = set(code for _, code in course_title_code_list) - set(course['code'] for course in course_skill_data)
-        print(f"Warning: {missing_count} courses were not found in the database. Missing codes: {missing_codes}")
-    
+    course_skill_data = find_relevant_courses(course_title_code_list, all_courses)    
     return course_skill_data
 
 
